@@ -1,6 +1,7 @@
 package com.nexent.app.ui.chat
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -24,6 +25,12 @@ import com.nexent.app.R
 import com.nexent.app.databinding.ActivityChatBinding
 import java.io.File
 import java.util.Locale
+
+data class SpeechRecognitionConfig(
+    val language: String,
+    val prompt: String,
+    val maxResults: Int,
+)
 
 class ChatActivity : AppCompatActivity() {
 
@@ -88,12 +95,15 @@ class ChatActivity : AppCompatActivity() {
     private val voiceLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        if (result.resultCode != RESULT_OK) return@registerForActivityResult
+
         val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-        val spokenText = matches?.firstOrNull() ?: return@registerForActivityResult
-        binding.etMessage.setText(spokenText)
+        val spokenText = matches?.firstOrNull()?.trim().orEmpty()
         if (spokenText.isNotBlank()) {
-            viewModel.sendMessage(spokenText)
-            binding.etMessage.setText("")
+            binding.etMessage.setText(spokenText)
+            binding.etMessage.setSelection(spokenText.length)
+        } else {
+            Toast.makeText(this, "未识别到语音内容", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -134,6 +144,24 @@ class ChatActivity : AppCompatActivity() {
         const val EXTRA_AGENT_NAME = "extra_agent_name"
         const val EXTRA_AGENT_TITLE = "extra_agent_title"
         const val EXTRA_AGENT_DESC = "extra_agent_desc"
+        private val GOOGLE_VOICE_PACKAGES = listOf(
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.apps.googlevoiceassistant"
+        )
+
+        fun createSpeechRecognitionConfig(): SpeechRecognitionConfig = SpeechRecognitionConfig(
+            language = "zh-CN",
+            prompt = "说出你想问的问题...",
+            maxResults = 1,
+        )
+
+        fun createSpeechRecognitionIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            val config = createSpeechRecognitionConfig()
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, config.language)
+            putExtra(RecognizerIntent.EXTRA_PROMPT, config.prompt)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, config.maxResults)
+        }
 
         private val avatarBgList = intArrayOf(
             R.drawable.bg_avatar_01, R.drawable.bg_avatar_02,
@@ -195,12 +223,7 @@ class ChatActivity : AppCompatActivity() {
 
         // Voice input via the add button
         binding.btnAdd.setOnClickListener {
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "说出你想问的问题...")
-            }
-            voiceLauncher.launch(intent)
+            launchVoiceRecognition()
         }
 
         // File picker via image button for both images and audio
@@ -310,15 +333,33 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun startVoiceRecognition() {
-        if (speechRecognizer == null) setupSpeechRecognizer()
         binding.btnVoice.alpha = 0.6f
         Toast.makeText(this, "按住说话，松开结束录音", Toast.LENGTH_SHORT).show()
-        speechRecognizer?.startListening(speechRecognizerIntent)
+        launchVoiceRecognition()
+    }
+
+    private fun launchVoiceRecognition() {
+        val intent = createSpeechRecognitionIntent()
+        val availablePackage = GOOGLE_VOICE_PACKAGES.firstOrNull { packageName ->
+            packageManager.resolveActivity(
+                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).setPackage(packageName),
+                PackageManager.MATCH_DEFAULT_ONLY
+            ) != null
+        }
+        if (availablePackage != null) {
+            intent.setPackage(availablePackage)
+        }
+
+        try {
+            voiceLauncher.launch(intent)
+        } catch (e: ActivityNotFoundException) {
+            binding.etMessage.requestFocus()
+            Toast.makeText(this, "当前设备没有可用的语音输入服务，请直接输入文字", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun stopVoiceRecognition() {
         binding.btnVoice.alpha = 1f
-        speechRecognizer?.stopListening()
     }
 
     private fun selectMode(mode: String) {

@@ -62,4 +62,13 @@ class ChatViewModelTest {
         assertFalse(ChatViewModel.isAudioMimeType("image/jpeg"))
         assertFalse(ChatViewModel.isAudioMimeType(null))
     }
+
+    @Test
+    fun createSpeechRecognitionConfig_setsUpChineseVoiceInput() {
+        val config = ChatActivity.createSpeechRecognitionConfig()
+
+        assertTrue(config.language == "zh-CN")
+        assertTrue(config.prompt == "说出你想问的问题...")
+        assertTrue(config.maxResults == 1)
+    }
 }
