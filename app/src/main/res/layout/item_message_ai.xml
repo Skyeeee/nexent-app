@@ -30,14 +30,16 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- Thinking process (collapsed by default for quick mode) -->
+        <!-- Thinking process (step-by-step reasoning) -->
         <LinearLayout
             android:id="@+id/thinking_container"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:visibility="gone"
-            android:layout_marginBottom="6dp">
+            android:layout_marginBottom="6dp"
+            android:background="@drawable/bg_search_bar"
+            android:padding="8dp">
 
             <TextView
                 android:id="@+id/tv_thinking_label"
@@ -46,15 +48,12 @@
                 android:layout_marginStart="4dp"
                 android:text="@string/thinking_label"
                 android:textColor="@color/text_tertiary"
-                android:textSize="11sp"
-                android:drawableEnd="@drawable/ic_chevron_down"
-                android:drawablePadding="2dp" />
+                android:textSize="11sp" />
 
             <TextView
                 android:id="@+id/tv_thinking"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@drawable/bg_search_bar"
                 android:maxWidth="260dp"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp"
@@ -66,6 +65,7 @@
                 android:layout_marginTop="4dp" />
         </LinearLayout>
 
+        <!-- Main message content (Markdown rendered) -->
         <TextView
             android:id="@+id/tv_message"
             android:layout_width="wrap_content"
@@ -80,6 +80,105 @@
             android:paddingTop="10dp"
             android:paddingBottom="10dp" />
 
+        <!-- Search results citation button -->
+        <LinearLayout
+            android:id="@+id/search_results_container"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+
+            <TextView
+                android:id="@+id/tv_search_results"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:textSize="11sp"
+                android:background="@drawable/bg_search_bar" />
+
+            <TextView
+                android:id="@+id/tv_search_results_detail"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:visibility="gone"
+                android:padding="8dp"
+                android:layout_marginTop="4dp"
+                android:textSize="11sp"
+                android:textColor="@color/text_secondary"
+                android:background="@drawable/bg_search_bar"
+                android:maxWidth="260dp" />
+        </LinearLayout>
+
+        <!-- Web images from picture_web -->
+        <LinearLayout
+            android:id="@+id/images_container"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone"
+            android:layout_marginTop="4dp"
+            android:layout_marginStart="4dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:background="?android:attr/selectableItemBackground">
+
+            <TextView
+                android:id="@+id/tv_images_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textSize="11sp"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp" />
+
+            <ImageView
+                android:id="@+id/iv_image_preview"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:scaleType="centerCrop"
+                android:layout_marginTop="4dp" />
+
+            <!-- Expanded images grid (placeholder for more images) -->
+            <LinearLayout
+                android:id="@+id/images_grid"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:visibility="gone"
+                android:layout_marginTop="4dp">
+
+                <TextView
+                    android:id="@+id/tv_images_more"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="11sp"
+                    android:textColor="@color/text_tertiary"
+                    android:visibility="gone"
+                    android:padding="4dp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Token metrics footnote -->
+        <TextView
+            android:id="@+id/tv_token_metrics"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:visibility="gone"
+            android:layout_marginStart="4dp"
+            android:layout_marginTop="4dp"
+            android:textSize="10sp"
+            android:textColor="@color/text_tertiary" />
+
+        <!-- Streaming indicator -->
         <TextView
             android:id="@+id/tv_streaming_indicator"
             android:layout_width="wrap_content"

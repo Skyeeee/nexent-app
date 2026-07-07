@@ -3,7 +3,6 @@ package com.nexent.app.ui.chat
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ImageView
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
@@ -13,11 +12,11 @@ import io.noties.markwon.Markwon
 import com.bumptech.glide.Glide
 import java.net.HttpURLConnection
 import java.net.URL
-import com.bumptech.glide.request.RequestListener
-import com.bumptech.glide.load.engine.GlideException
-import com.bumptech.glide.request.target.Target
-import com.bumptech.glide.load.DataSource
-import android.graphics.drawable.Drawable
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import android.graphics.Typeface
 
 class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(MessageDiffCallback()) {
 
@@ -60,10 +59,8 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
                 binding.ivAttachment.visibility = View.VISIBLE
                 binding.ivAttachment.adjustViewBounds = true
 
-                // Log the URI so we can inspect what's being loaded at runtime
                 android.util.Log.d("MessageAdapter", "Loading image: ${message.imageUri}")
 
-                // For HTTP URLs, do a quick HEAD probe on a background thread to log response code.
                 if (message.imageUri.startsWith("http", true)) {
                     Thread {
                         try {
@@ -81,7 +78,6 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
                     }.start()
                 }
 
-                // Use Glide with placeholder/error.
                 Glide.with(binding.ivAttachment.context)
                     .load(message.imageUri)
                     .centerCrop()
@@ -100,16 +96,169 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
         private val markwon = Markwon.create(binding.root.context)
 
         fun bind(message: ChatMessage) {
-            markwon.setMarkdown(binding.tvMessage, message.content)
+            // Step-by-step thinking process (TaskWindow equivalent)
+            bindThinkingProcess(message)
+
+            // Main content (final answer) with Markdown rendering
+            val displayContent = if (message.finalAnswer.isNotBlank()) {
+                message.finalAnswer
+            } else {
+                message.content
+            }
+            markwon.setMarkdown(binding.tvMessage, displayContent)
+
+            // Search results citations (sources button)
+            bindSearchResults(message)
+
+            // Web images (from picture_web SSE events)
+            bindWebImages(message)
+
+            // Streaming indicator
             binding.tvStreamingIndicator.visibility =
                 if (message.isStreaming) View.VISIBLE else View.GONE
 
-            // Show thinking content if available (deep think mode)
-            if (message.thinkingContent.isNotBlank()) {
+            // Token metrics (if available)
+            bindTokenMetrics(message)
+        }
+
+        private fun bindThinkingProcess(message: ChatMessage) {
+            val steps = message.steps
+            if (steps.isNotEmpty()) {
                 binding.thinkingContainer.visibility = View.VISIBLE
-                markwon.setMarkdown(binding.tvThinking, message.thinkingContent)
+
+                val sb = StringBuilder()
+                for ((stepIndex, step) in steps.withIndex()) {
+                    if (step.title.isNotBlank()) {
+                        sb.appendLine(step.title)
+                    }
+                    for (content in step.contents) {
+                        when (content.type) {
+                            ChatViewModel.TYPE_MODEL_OUTPUT_THINKING -> {
+                                sb.appendLine("🤔 ${content.content}")
+                            }
+                            ChatViewModel.TYPE_MODEL_OUTPUT_DEEP_THINKING -> {
+                                sb.appendLine("🧠 ${content.content}")
+                            }
+                            ChatViewModel.TYPE_MODEL_OUTPUT_CODE -> {
+                                sb.appendLine("💻 ```\n${content.content}\n```")
+                            }
+                            "executing" -> {
+                                sb.appendLine("🔧 ${content.content}")
+                            }
+                            ChatViewModel.TYPE_MEMORY_SEARCH -> {
+                                sb.appendLine("📂 ${content.content}")
+                            }
+                            ChatViewModel.TYPE_AGENT_NEW_RUN -> {
+                                sb.appendLine("💭 ${content.content}")
+                            }
+                            ChatViewModel.TYPE_CARD -> {
+                                sb.appendLine("📋 ${content.content.take(80)}")
+                            }
+                            ChatViewModel.TYPE_ERROR -> {
+                                sb.appendLine("❌ ${content.content}")
+                            }
+                        }
+                    }
+                    step.metrics?.let { metrics ->
+                        sb.appendLine("   ⚡ ${metrics.duration}s | input: ${metrics.stepInputTokens ?: "?"} | output: ${metrics.stepOutputTokens ?: "?"} tokens")
+                    }
+                    if (stepIndex < steps.size - 1) {
+                        sb.appendLine("---")
+                    }
+                }
+                binding.tvThinking.text = sb.toString().trim()
             } else {
                 binding.thinkingContainer.visibility = View.GONE
+            }
+        }
+
+        private fun bindSearchResults(message: ChatMessage) {
+            val results = message.searchResults
+            if (results.isNotEmpty()) {
+                binding.searchResultsContainer.visibility = View.VISIBLE
+
+                val sb = SpannableStringBuilder()
+                sb.append("📚 Sources (${results.size}): ")
+
+                val groupedByTool = results.groupBy { it.toolSign }
+                for ((toolSign, items) in groupedByTool) {
+                    for (item in items) {
+                        val start = sb.length
+                        val label = "[${toolSign}${item.citeIndex}]"
+                        sb.append(label)
+                        sb.setSpan(
+                            ForegroundColorSpan(0xFF1A73E8.toInt()),
+                            start, start + label.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                        sb.setSpan(
+                            StyleSpan(Typeface.BOLD),
+                            start, start + label.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                        sb.append(" ")
+                    }
+                }
+                binding.tvSearchResults.text = sb
+
+                binding.searchResultsContainer.setOnClickListener {
+                    val expanded = binding.tvSearchResultsDetail.visibility == View.VISIBLE
+                    binding.tvSearchResultsDetail.visibility =
+                        if (expanded) View.GONE else View.VISIBLE
+                    if (!expanded) {
+                        val detailSb = StringBuilder()
+                        for ((i, r) in results.withIndex()) {
+                            detailSb.appendLine("${i + 1}. [${r.toolSign}${r.citeIndex}] ${r.title}")
+                            if (r.url.isNotBlank()) {
+                                detailSb.appendLine("   ${r.url}")
+                            }
+                            detailSb.appendLine("   ${r.text.take(200)}")
+                            detailSb.appendLine()
+                        }
+                        binding.tvSearchResultsDetail.text = detailSb.toString().trim()
+                    }
+                }
+            } else {
+                binding.searchResultsContainer.visibility = View.GONE
+                binding.tvSearchResultsDetail.visibility = View.GONE
+            }
+        }
+
+        private fun bindWebImages(message: ChatMessage) {
+            val images = message.images
+            if (images.isNotEmpty()) {
+                binding.imagesContainer.visibility = View.VISIBLE
+                binding.tvImagesLabel.text = "🖼️ Images (${images.size})"
+
+                Glide.with(binding.ivImagePreview.context)
+                    .load(images.firstOrNull())
+                    .centerCrop()
+                    .placeholder(android.R.color.darker_gray)
+                    .error(android.R.drawable.stat_notify_error)
+                    .into(binding.ivImagePreview)
+
+                binding.imagesContainer.setOnClickListener {
+                    val expanded = binding.imagesGrid.visibility == View.VISIBLE
+                    binding.imagesGrid.visibility =
+                        if (expanded) View.GONE else View.VISIBLE
+                    if (!expanded && images.size > 1) {
+                        binding.tvImagesMore.text = "+${images.size - 1} more"
+                        binding.tvImagesMore.visibility = View.VISIBLE
+                    }
+                }
+            } else {
+                binding.imagesContainer.visibility = View.GONE
+                binding.imagesGrid.visibility = View.GONE
+            }
+        }
+
+        private fun bindTokenMetrics(message: ChatMessage) {
+            val allMetrics = message.steps.mapNotNull { it.metrics }
+            if (allMetrics.isNotEmpty()) {
+                val totalTokens = allMetrics.sumOf { it.totalOutputTokens }
+                val totalDuration = allMetrics.sumOf { it.duration }
+                binding.tvTokenMetrics.visibility = View.VISIBLE
+                binding.tvTokenMetrics.text = "⚡ ${String.format("%.1f", totalDuration)}s | $totalTokens tokens"
+            } else {
+                binding.tvTokenMetrics.visibility = View.GONE
             }
         }
     }
