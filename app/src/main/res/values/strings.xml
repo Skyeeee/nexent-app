@@ -22,8 +22,9 @@
     <string name="thinking_label">思考过程</string>
     <string name="ai_disclaimer">内容由 AI 生成，仅供参考</string>
     <string name="btn_add">添加</string>
+    <string name="btn_voice">语音</string>
     <string name="btn_emoji">表情</string>
-    <string name="btn_image">图片</string>
+    <string name="btn_image">文件</string>
     <string name="btn_edit">编辑</string>
     <string name="back">返回</string>
 </resources>

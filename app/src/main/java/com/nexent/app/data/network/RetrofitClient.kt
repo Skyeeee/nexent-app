@@ -3,13 +3,14 @@ package com.nexent.app.data.network
 import com.nexent.app.data.model.ChatRequest
 import com.nexent.app.data.model.ChatStreamChunk
 import com.google.gson.Gson
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -46,7 +47,7 @@ object RetrofitClient {
 
     private fun buildService(baseUrl: String, apiKey: String): NexentApiService {
         val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = HttpLoggingInterceptor.Level.NONE
         }
 
         val client = OkHttpClient.Builder()
@@ -73,15 +74,14 @@ object RetrofitClient {
     }
 
     /**
-     * Execute a streaming chat request and emit chunks via a Channel.
+     * Execute a streaming chat request and emit chunks via a Flow.
      */
-    suspend fun streamChat(
+    fun streamChat(
         baseUrl: String,
         request: ChatRequest,
         apiKey: String = ""
-    ): Channel<ChatStreamChunk> = withContext(Dispatchers.IO) {
+    ): Flow<ChatStreamChunk> = callbackFlow {
         val key = apiKey.ifBlank { "nexent-6f1913254fb6a73d55d3254e" }
-        val channel = Channel<ChatStreamChunk>(Channel.UNLIMITED)
         val normalizedUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
 
         val client = OkHttpClient.Builder()
@@ -96,7 +96,7 @@ object RetrofitClient {
         val httpRequest = Request.Builder()
             .url("${normalizedUrl}nb/v1/chat/run")
             .post(reqBody)
-            .addHeader("Content-Type", "application/json")
+
             .addHeader("Authorization", "Bearer $key")
             .addHeader("Idempotency-Key", "idem-${UUID.randomUUID()}")
             .build()
@@ -104,8 +104,8 @@ object RetrofitClient {
         try {
             val response = client.newCall(httpRequest).execute()
             val source = response.body?.source() ?: run {
-                channel.close()
-                return@withContext channel
+                close()
+                return@callbackFlow
             }
 
             while (!source.exhausted()) {
@@ -113,23 +113,76 @@ object RetrofitClient {
                 if (line.startsWith("data: ")) {
                     val data = line.removePrefix("data: ").trim()
                     if (data == "[DONE]") {
-                        channel.send(ChatStreamChunk(done = true))
+                        trySend(ChatStreamChunk(done = true))
                         break
                     }
                     try {
                         val chunk = gson.fromJson(data, ChatStreamChunk::class.java)
-                        channel.send(chunk)
+                        trySend(chunk)
                     } catch (_: Exception) {
                         // Skip malformed JSON lines
                     }
                 }
             }
         } catch (e: Exception) {
-            channel.close(e)
-            return@withContext channel
+            close(e)
+            return@callbackFlow
         }
 
-        channel.close()
-        channel
+        close()
+    }
+
+    /**
+     * Upload attachment bytes to the server. Returns s3_url on success or null on failure.
+     */
+    fun uploadAttachment(
+        baseUrl: String,
+        filename: String,
+        contentType: String,
+        bytes: ByteArray,
+        apiKey: String = ""
+    ): String? {
+        val key = apiKey.ifBlank { "nexent-6f1913254fb6a73d55d3254e" }
+        val normalizedUrl = if (baseUrl.endsWith("/")) baseUrl else "$baseUrl/"
+
+        val client = OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(60, TimeUnit.SECONDS)
+            .build()
+
+        val mediaType = try { contentType.toMediaType() } catch (_: Exception) { "application/octet-stream".toMediaType() }
+        val fileBody = bytes.toRequestBody(mediaType)
+
+        val multipart = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("files", filename, fileBody)
+            .build()
+
+        val httpRequest = Request.Builder()
+            .url("${normalizedUrl}nb/v1/chat/attachments/upload")
+            .post(multipart)
+            .addHeader("Authorization", "Bearer $key")
+            .build()
+
+        try {
+            val response = client.newCall(httpRequest).execute()
+            if (!response.isSuccessful) return null
+            val bodyStr = response.body?.string() ?: return null
+                return try {
+                val map = gson.fromJson(bodyStr, Map::class.java)
+                val files = map["files"] as? List<*>
+                val firstFile = files?.firstOrNull() as? Map<*, *>
+                // Prefer presigned_url or s3_url for direct access (if provided), otherwise fall back to url
+                val presigned = firstFile?.get("presigned_url")?.toString()?.takeIf { it.isNotBlank() }
+                val s3url = firstFile?.get("s3_url")?.toString()?.takeIf { it.isNotBlank() }
+                val url = firstFile?.get("url")?.toString()?.takeIf { it.isNotBlank() }
+                presigned ?: s3url ?: url
+            } catch (_: Exception) {
+                null
+            }
+        } catch (e: Exception) {
+            return null
+        }
     }
 }

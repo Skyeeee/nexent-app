@@ -6,15 +6,20 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
+import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.nexent.app.R
 import com.nexent.app.databinding.ActivityChatBinding
 import java.io.File
@@ -27,13 +32,36 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var messageAdapter: MessageAdapter
 
     private var pendingCameraUri: Uri? = null
+    private var shouldAutoScrollToBottom = true
 
-    // File picker
+    private var speechRecognizer: SpeechRecognizer? = null
+    private lateinit var speechRecognizerIntent: Intent
+    private var isVoiceButtonPressed: Boolean = false
+    private val recordAudioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            Log.d("ChatActivity", "RECORD_AUDIO permission granted")
+            // Only start recognition if the user is still pressing the voice button
+            if (isVoiceButtonPressed) startVoiceRecognition()
+        } else {
+            Log.d("ChatActivity", "RECORD_AUDIO permission denied")
+            Toast.makeText(this, "需要麦克风权限才能使用语音输入", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // File picker for images or audio
     private val pickFileLauncher = registerForActivityResult(
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            viewModel.sendImageMessage(it, "请分析这个文件")
+            val mimeType = contentResolver.getType(it) ?: ""
+            val isAudio = mimeType.lowercase(Locale.getDefault()).startsWith("audio/")
+            if (isAudio) {
+                viewModel.sendVoiceMessage(it, "")
+            } else {
+                viewModel.sendImageMessage(it, "")
+            }
         }
     }
 
@@ -43,7 +71,7 @@ class ChatActivity : AppCompatActivity() {
     ) { success ->
         if (success) {
             pendingCameraUri?.let { uri ->
-                viewModel.sendImageMessage(uri, "请分析这张图片")
+                viewModel.sendImageMessage(uri, "")
             }
         }
     }
@@ -79,6 +107,7 @@ class ChatActivity : AppCompatActivity() {
 
         setupHeader(agentTitle)
         setupRecyclerView()
+        setupSpeechRecognizer()
         setupInputArea()
         observeViewModel()
 
@@ -121,6 +150,15 @@ class ChatActivity : AppCompatActivity() {
                 stackFromEnd = true
             }
             adapter = messageAdapter
+            addOnScrollListener(object : RecyclerView.OnScrollListener() {
+                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                    super.onScrolled(recyclerView, dx, dy)
+                    val layoutManager = recyclerView.layoutManager as? LinearLayoutManager ?: return
+                    val lastVisible = layoutManager.findLastVisibleItemPosition()
+                    val totalCount = recyclerView.adapter?.itemCount ?: 0
+                    shouldAutoScrollToBottom = lastVisible >= totalCount - 1
+                }
+            })
         }
     }
 
@@ -130,6 +168,28 @@ class ChatActivity : AppCompatActivity() {
             if (text.isNotBlank()) {
                 viewModel.sendMessage(text)
                 binding.etMessage.setText("")
+            }
+        }
+
+        binding.btnVoice.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    isVoiceButtonPressed = true
+                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                        == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        startVoiceRecognition()
+                    } else {
+                        recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    isVoiceButtonPressed = false
+                    stopVoiceRecognition()
+                    true
+                }
+                else -> false
             }
         }
 
@@ -143,9 +203,9 @@ class ChatActivity : AppCompatActivity() {
             voiceLauncher.launch(intent)
         }
 
-        // File picker via image button
+        // File picker via image button for both images and audio
         binding.btnImage.setOnClickListener {
-            pickFileLauncher.launch("image/*")
+            pickFileLauncher.launch("*/*")
         }
 
         // Camera via edit button
@@ -175,6 +235,92 @@ class ChatActivity : AppCompatActivity() {
         popup.show()
     }
 
+    private fun setupSpeechRecognizer() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
+
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {
+                    Log.d("ChatActivity", "onReadyForSpeech")
+                }
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {
+                    // update visualizer based on rms
+                    Log.d("ChatActivity", "onRmsChanged: $rmsdB")
+                    runOnUiThread {
+                        binding.voiceLevelView.visibility = View.VISIBLE
+                        updateVoiceLevel(rmsdB)
+                    }
+                }
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {
+                    binding.btnVoice.alpha = 1f
+                    Log.d("ChatActivity", "onEndOfSpeech")
+                    runOnUiThread {
+                        binding.voiceLevelView.visibility = View.GONE
+                    }
+                }
+                override fun onError(error: Int) {
+                    binding.btnVoice.alpha = 1f
+                    Log.d("ChatActivity", "onError: $error")
+                    val message = when (error) {
+                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "网络错误，请稍后重试"
+                        SpeechRecognizer.ERROR_AUDIO -> "录音发生错误"
+                        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "未识别到语音"
+                        else -> "语音识别失败"
+                    }
+                    Toast.makeText(this@ChatActivity, message, Toast.LENGTH_SHORT).show()
+                    runOnUiThread {
+                        binding.voiceLevelView.visibility = View.GONE
+                    }
+                }
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val partialText = matches?.firstOrNull()
+                    if (!partialText.isNullOrBlank()) {
+                        binding.etMessage.setText(partialText)
+                        binding.etMessage.setSelection(partialText.length)
+                        Log.d("ChatActivity", "onPartialResults: $partialText")
+                    }
+                }
+                override fun onResults(results: Bundle?) {
+                    binding.btnVoice.alpha = 1f
+                    Log.d("ChatActivity", "onResults")
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val spokenText = matches?.firstOrNull().orEmpty()
+                    if (spokenText.isNotBlank()) {
+                        binding.etMessage.setText(spokenText)
+                        binding.etMessage.setSelection(spokenText.length)
+                        runOnUiThread {
+                            binding.voiceLevelView.visibility = View.GONE
+                        }
+                    } else {
+                        Toast.makeText(this@ChatActivity, "未识别到语音内容", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        }
+
+        speechRecognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        }
+    }
+
+    private fun startVoiceRecognition() {
+        if (speechRecognizer == null) setupSpeechRecognizer()
+        binding.btnVoice.alpha = 0.6f
+        Toast.makeText(this, "按住说话，松开结束录音", Toast.LENGTH_SHORT).show()
+        speechRecognizer?.startListening(speechRecognizerIntent)
+    }
+
+    private fun stopVoiceRecognition() {
+        binding.btnVoice.alpha = 1f
+        speechRecognizer?.stopListening()
+    }
+
     private fun selectMode(mode: String) {
         if (mode == "deep") {
             binding.tvModeLabel.text = getString(R.string.mode_deep)
@@ -182,6 +328,20 @@ class ChatActivity : AppCompatActivity() {
             binding.tvModeLabel.text = getString(R.string.mode_quick)
         }
         viewModel.setThinkMode(mode)
+    }
+
+    private fun updateVoiceLevel(rmsdB: Float) {
+        // Normalize rmsdB to 0..1 (typical Android RMS is small negative to positive)
+        val level = ((rmsdB + 10f) / 20f).coerceIn(0f, 1f)
+        val dots = listOf(binding.voiceDot1, binding.voiceDot2, binding.voiceDot3)
+        for ((i, dot) in dots.withIndex()) {
+            val thresholdStart = i * (1f / dots.size)
+            val thresholdEnd = (i + 1) * (1f / dots.size)
+            val factor = ((level - thresholdStart) / (thresholdEnd - thresholdStart)).coerceIn(0f, 1f)
+            val scale = 1f + factor * 1.4f
+            dot.scaleY = scale
+            dot.alpha = 0.5f + 0.5f * factor
+        }
     }
 
     private fun checkCameraPermission() {
@@ -204,11 +364,20 @@ class ChatActivity : AppCompatActivity() {
         takePictureLauncher.launch(pendingCameraUri!!)
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+    }
+
     private fun observeViewModel() {
         viewModel.messages.observe(this) { messages ->
+            val shouldScroll = shouldAutoScrollToBottom && messages.isNotEmpty()
             messageAdapter.submitList(messages.toList()) {
-                if (messages.isNotEmpty()) {
-                    binding.rvMessages.smoothScrollToPosition(messages.size - 1)
+                if (shouldScroll) {
+                    binding.rvMessages.post {
+                        binding.rvMessages.scrollToPosition(messages.size - 1)
+                    }
                 }
             }
         }
