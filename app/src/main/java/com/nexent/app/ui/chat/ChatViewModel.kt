@@ -45,7 +45,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _error = MutableLiveData<String?>()
     val error: LiveData<String?> = _error
 
-    private var conversationId: Int = 1
+    private var conversationId: Int? = null
     private var currentAgentName: String = ""
     private var deepThinkEnabled: Boolean = false
 
@@ -94,39 +94,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
             val fullRaw = StringBuilder()
             var finalApplied = false
-            var separationLocked = false
-            var cachedThinkPart = ""
-            var chunkCount = 0
-            val separationInterval = 3
 
             try {
                 RetrofitClient.streamChat(baseUrl, request, prefHelper.apikey)
                     .flowOn(Dispatchers.IO)
                     .collect { chunk ->
-                        // Only sanitize the new chunk content, not the entire accumulated text
                         val chunkText = sanitizeContent(chunk.content)
                         fullRaw.append(chunkText)
                         chunk.conversationId?.let { conversationId = it }
-                        chunkCount++
 
-                        if (!separationLocked && (chunk.done || chunkCount % separationInterval == 0)) {
-                            // Incremental separation: only run every separationInterval chunks or when done
-                            val currentFull = fullRaw.toString()
-                            val (thinkPart, answerPart) = separateThinkingAnswer(currentFull, deepThinkEnabled)
-
-                            // Lock separation once we have a clear think/answer split
-                            if (answerPart.isNotBlank() && thinkPart.isNotBlank()) {
-                                separationLocked = true
-                                cachedThinkPart = thinkPart
-                            }
-
-                            updateStreamingMessage(answerPart.ifBlank { "…" }, thinkPart)
-                        } else if (separationLocked) {
-                            // Separation is locked - only update the answer part incrementally
-                            val currentFull = fullRaw.toString()
-                            val (_, answerPart) = separateThinkingAnswer(currentFull, deepThinkEnabled)
-                            updateStreamingMessage(answerPart.ifBlank { "…" }, cachedThinkPart)
-                        }
+                        val rendered = fullRaw.toString().trim()
+                        updateStreamingMessage(rendered.ifBlank { "…" }, "")
 
                         if (chunk.done) {
                             applyFinalSeparation(fullRaw)
@@ -165,10 +143,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (errMsgs.isNotEmpty() && errMsgs.last().isStreaming) {
             val partialContent = fullRaw.toString().trim()
             if (partialContent.isNotBlank()) {
-                val (think, answer) = separateThinkingAnswer(partialContent, deepThinkEnabled)
+                val sanitizedPartial = sanitizeContent(partialContent)
                 errMsgs[errMsgs.lastIndex] = errMsgs.last().copy(
-                    content = answer.ifBlank { partialContent },
-                    thinkingContent = think,
+                    content = sanitizedPartial.ifBlank { partialContent },
+                    thinkingContent = "",
                     isStreaming = false
                 )
             } else {
@@ -176,10 +154,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             _messages.value = errMsgs.toList()
         }
-            // Ensure we surface a useful message and also log full stack for debugging
-            val msg = e.message ?: e::class.java.name
-            _error.value = "发送失败: $msg"
-            Log.e("ChatViewModel", "handleStreamError: $msg\n${e.stackTraceToString()}")
+        // Ensure we surface a useful message and also log full stack for debugging
+        val msg = e.message ?: e::class.java.name
+        _error.value = "发送失败: $msg"
+        Log.e("ChatViewModel", "handleStreamError: $msg\n${e.stackTraceToString()}")
     }
 
     fun sendImageMessage(imageUri: Uri, description: String) {
@@ -369,267 +347,48 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (last < 0 || !finalMsgs[last].isStreaming) return
 
         val fullText = fullRaw.toString()
-        val (think, answer) = separateThinkingAnswer(fullText, deepThinkEnabled)
+        val sanitizedText = sanitizeContent(fullText)
         finalMsgs[last] = finalMsgs[last].copy(
-            content = answer.ifBlank { fullText },
-            thinkingContent = think,
+            content = sanitizedText.ifBlank { fullText },
+            thinkingContent = "",
             isStreaming = false
         )
         _messages.value = finalMsgs.toList()
     }
 
     companion object {
-        // MCP/tool call markers - extracted into thinkingContent instead of removed
-        private val MCP_LINE_PATTERN = Regex("(?mi)^\\s*(MCP_START|MCP_END|MCP_CALL|TOOL_START|TOOL_END).*$")
-        private val TOOL_CALL_BLOCK_PATTERN = Regex("<(tool_call|function_call)>.*?</\\1>", RegexOption.DOT_MATCHES_ALL)
-        private val MCP_BRACKET_PATTERN = Regex("\\[MCP_.*?\\]", RegexOption.IGNORE_CASE)
-        private val META_JSON_LINE_PATTERN = Regex("(?m)^\\s*\\{.*?(step_number|token_threshold|token_limit|reasoning).*$")
-        private val STEP_MARKER_PREFIX_PATTERN = Regex("(?m)^\\s*(<步骤\\d+>|步骤\\d+[:：.]?)\\s*")
-        private val PHASE_PAYLOAD_PATTERN = Regex("""\{\s*["“”']phase["“”']\s*:\s*[^{}]*\}""", RegexOption.DOT_MATCHES_ALL)
-        private val BLANK_LINE_PATTERN = Regex("(?m)^\\s*$\\n?", RegexOption.MULTILINE)
-        private val UNICODE_ESCAPE_PATTERN = Regex("\\\\u([0-9a-fA-F]{4})")
-
-        // Thinking/answer structural markers (in priority order)
-        private val THINK_TAG_REGEX = Regex("<think>(.*?)</think>", RegexOption.DOT_MATCHES_ALL)
-        private val THINKING_TAG_REGEX = Regex("<thinking>(.*?)</thinking>", RegexOption.DOT_MATCHES_ALL)
-        private val THINK_BLOCK_REGEX = Regex("```thinking\\s*\\n?(.*?)\\n?```", RegexOption.DOT_MATCHES_ALL)
-        private val THINK_BRACKET_REGEX = Regex("\\[think\\](.*?)\\[/think\\]", RegexOption.DOT_MATCHES_ALL)
-        private val SEPARATOR_LINE_REGEX = Regex("(?m)^[-=]{3,}\\s*$")
-        private val MARKDOWN_THINK_HEADER = Regex("###\\s*思考过程.*", RegexOption.IGNORE_CASE)
-        private val MARKDOWN_ANSWER_HEADER = Regex("###\\s*回答.*", RegexOption.IGNORE_CASE)
-
         fun isAudioMimeType(contentType: String?): Boolean {
             if (contentType.isNullOrBlank()) return false
             return contentType.lowercase(Locale.getDefault()).startsWith("audio/")
         }
 
-        private fun isProbablyEmulator(): Boolean {
-            return (Build.FINGERPRINT.startsWith("generic")
-                    || Build.FINGERPRINT.lowercase(Locale.getDefault()).contains("vbox")
-                    || Build.FINGERPRINT.lowercase(Locale.getDefault()).contains("test-keys")
-                    || Build.MODEL.contains("Emulator")
-                    || Build.MODEL.contains("Android SDK built for x86")
-                    || Build.MANUFACTURER.contains("Genymotion")
-                    || Build.BRAND.startsWith("generic")
-                    || Build.DEVICE.startsWith("generic"))
-        }
-
-        /** Clean up stream output - normalize escapes, remove blank lines */
         fun sanitizeContent(text: String): String {
-            // Fix escape order: process \\\\ before \\n to avoid double-escaping issues
-            val normalized = text
-                .replace("\\\\", "\\")  // \\ → \ (must be first to prevent \\n from being consumed by \\n rule)
-                .replace("\\r\\n", "\n")
-                .replace("\\n", "\n")
-                .replace("\\r", "\r")
-                .replace("\\t", "\t")
-                .replace("\\\"", "\"")
-                .replace(UNICODE_ESCAPE_PATTERN) { match ->
-                    match.groupValues[1].toInt(16).toChar().toString()
-                }
+            var sanitized = text
 
-            // Remove noisy stream markers and metadata payloads before rendering
-            val cleaned = normalized
-                .replace(PHASE_PAYLOAD_PATTERN, "")
-                .replace(META_JSON_LINE_PATTERN, "")
-                .lines()
-                .joinToString("\n") { line ->
-                    line.replace(STEP_MARKER_PREFIX_PATTERN, "")
-                }
+            sanitized = sanitized.replace(Regex("\\\\u([0-9a-fA-F]{4})")) { match ->
+                match.groupValues[1].toInt(16).toChar().toString()
+            }
+            sanitized = sanitized.replace("\\n", "\n")
+            sanitized = sanitized.replace("\\r\\n", "\n")
+            sanitized = sanitized.replace("\\r", "\n")
+            sanitized = sanitized.replace("\\\"", "\"")
 
-            return cleaned
-                .replace(BLANK_LINE_PATTERN, "")
+            sanitized = sanitized
+                .replace(Regex("MCP_START.*", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("MCP_END.*", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("MCP_CALL.*", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("TOOL_START.*", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("TOOL_END.*", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("<tool_call>.*?</tool_call>", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("<function_call>.*?</function_call>", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("\\[MCP_.*?\\]", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("<\\s*步骤\\d+\\s*>", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("(?m)(^|\\s)步骤\\d+[:：]"), " ")
+                .replace(Regex("\\{[^{}]*(phase|step_number|token_threshold|thinking|reasoning|evaluation|metadata)[^{}]*\\}", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("(?m)^\\s*$\\n?", RegexOption.MULTILINE), "")
                 .trim()
-        }
 
-        /**
-         * Extract MCP/tool call markers from text into thinking content.
-         * Returns (markerText, cleanedText).
-         * Step markers (<步骤N>, 步骤N:) are NOT extracted - they remain for structural separation.
-         */
-        private fun extractMCPMarkers(text: String): Pair<String, String> {
-            val markers = mutableListOf<String>()
-            var cleaned = text
-
-            // Extract MCP/TOOL line markers (e.g. "MCP_START search", "TOOL_END calc")
-            val lineMatches = MCP_LINE_PATTERN.findAll(cleaned).toList()
-            for (match in lineMatches) {
-                markers.add(match.value.trim())
-            }
-            cleaned = cleaned.replace(MCP_LINE_PATTERN, "")
-
-            // Extract <tool_call>...</tool_call> and <function_call>...</function_call> blocks
-            val blockMatches = TOOL_CALL_BLOCK_PATTERN.findAll(cleaned).toList()
-            for (match in blockMatches) {
-                markers.add(match.value.trim())
-            }
-            cleaned = cleaned.replace(TOOL_CALL_BLOCK_PATTERN, "")
-
-            // Extract [MCP_*] bracket markers
-            val bracketMatches = MCP_BRACKET_PATTERN.findAll(cleaned).toList()
-            for (match in bracketMatches) {
-                markers.add(match.value.trim())
-            }
-            cleaned = cleaned.replace(MCP_BRACKET_PATTERN, "")
-
-            // Extract metadata JSON lines (step_number, token_threshold, etc.)
-            val metaMatches = META_JSON_LINE_PATTERN.findAll(cleaned).toList()
-            for (match in metaMatches) {
-                markers.add(match.value.trim())
-            }
-            cleaned = cleaned.replace(META_JSON_LINE_PATTERN, "")
-
-            return Pair(
-                markers.joinToString("\n"),
-                cleaned.replace(BLANK_LINE_PATTERN, "").trim()
-            )
-        }
-
-        /**
-         * Separate thinking content from answer using structural markers.
-         * Returns (thinkingContent, answerContent).
-         *
-         * Processing order:
-         * 0. Extract MCP/tool call markers into thinkingContent
-         * 1-8. Structural separation on remaining text
-         */
-        fun separateThinkingAnswer(fullText: String, isDeepThink: Boolean): Pair<String, String> {
-            if (fullText.isBlank()) return Pair("", fullText)
-
-            // Step 0: Extract MCP/tool call markers into thinking content
-            val (mcpMarkers, textWithoutMCP) = extractMCPMarkers(fullText)
-
-            // Run structural separation on text without MCP markers
-            val (thinkFromStructure, answer) = separateByStructure(textWithoutMCP, isDeepThink)
-
-            // Combine MCP markers with structural thinking content
-            val combinedThink = when {
-                mcpMarkers.isNotBlank() && thinkFromStructure.isNotBlank() ->
-                    "$mcpMarkers\n\n$thinkFromStructure"
-                mcpMarkers.isNotBlank() -> mcpMarkers
-                else -> thinkFromStructure
-            }
-
-            return Pair(combinedThink, answer)
-        }
-
-        /**
-         * Core separation logic using structural markers.
-         * Step markers (<步骤N>, 步骤N:) are preserved and used for separation.
-         */
-        private fun separateByStructure(fullText: String, isDeepThink: Boolean): Pair<String, String> {
-            // 1)  thinking... response XML tags
-            THINK_TAG_REGEX.find(fullText)?.let { m ->
-                val think = m.groupValues[1].trim()
-                val answer = fullText.replace(THINK_TAG_REGEX, "").trim()
-                return Pair(think, answer)
-            }
-
-            // 2) <thinking>...</thinking> XML tags
-            THINKING_TAG_REGEX.find(fullText)?.let { m ->
-                val think = m.groupValues[1].trim()
-                val answer = fullText.replace(THINKING_TAG_REGEX, "").trim()
-                return Pair(think, answer)
-            }
-
-            // 3) ```thinking ... ``` code block
-            THINK_BLOCK_REGEX.find(fullText)?.let { m ->
-                val think = m.groupValues[1].trim()
-                val answer = fullText.replace(THINK_BLOCK_REGEX, "").trim()
-                return Pair(think, answer)
-            }
-
-            // 4) [think]...[/think]
-            THINK_BRACKET_REGEX.find(fullText)?.let { m ->
-                val think = m.groupValues[1].trim()
-                val answer = fullText.replace(THINK_BRACKET_REGEX, "").trim()
-                return Pair(think, answer)
-            }
-
-            // 5) ### 思考过程 / ### 回答 markdown headers
-            val thinkHeader = MARKDOWN_THINK_HEADER.find(fullText)
-            val answerHeader = MARKDOWN_ANSWER_HEADER.find(fullText)
-            if (thinkHeader != null && answerHeader != null) {
-                val think = fullText.substring(thinkHeader.range.last + 1, answerHeader.range.first).trim()
-                val answer = fullText.substring(answerHeader.range.last + 1).trim()
-                return Pair(think, answer)
-            }
-
-            // 6) --- or === separator line
-            SEPARATOR_LINE_REGEX.find(fullText)?.let { m ->
-                val think = fullText.substring(0, m.range.first).trim()
-                val answer = fullText.substring(m.range.last + 1).trim()
-                if (think.isNotBlank()) return Pair(think, answer)
-            }
-
-            // 7) <步骤N> step markers (chain-of-thought planning)
-            // Step markers are preserved in the text (not removed by sanitizeContent)
-            if (fullText.startsWith("<步骤") || fullText.startsWith("步骤") || fullText.contains("\n<步骤") || fullText.contains("\n步骤")) {
-                val lines = fullText.split("\n")
-                val stepLines = mutableListOf<String>()
-                val answerLines = mutableListOf<String>()
-                var inSteps = true
-                for (line in lines) {
-                    val trimmed = line.trim()
-                    if (inSteps) {
-                        if (trimmed.startsWith("<步骤") || trimmed.startsWith("步骤")) {
-                            stepLines.add(line)
-                        } else if (trimmed.isEmpty()) {
-                            stepLines.add(line)
-                        } else {
-                            inSteps = false
-                            answerLines.add(line)
-                        }
-                    } else {
-                        answerLines.add(line)
-                    }
-                }
-                if (stepLines.isNotEmpty() && answerLines.isNotEmpty()) {
-                    val think = stepLines.joinToString("\n").trim()
-                    val answer = answerLines.joinToString("\n").trim()
-                    if (answer.isNotBlank()) return Pair(think, answer)
-                }
-                // All lines matched steps — put everything in answer
-                if (stepLines.isNotEmpty() && answerLines.isEmpty()) {
-                    return Pair("", fullText)
-                }
-            }
-
-            // 8) Deep think mode: try heuristic split at natural transition phrases
-            if (isDeepThink && fullText.length > 80) {
-                // Each entry: (phrase, isHighFrequency)
-                // High-frequency words ("因此", "所以") require preceding punctuation to avoid false splits
-                val transitions = listOf(
-                    "综上所述" to false,
-                    "基于以上分析" to false,
-                    "因此" to true,
-                    "所以" to true,
-                    "答案是" to false,
-                    "回答：" to false,
-                    "最终答案" to false,
-                    "总结" to false,
-                    "结论" to false
-                )
-                for ((phrase, isHighFrequency) in transitions) {
-                    val idx = fullText.indexOf(phrase)
-                    // Only split if phrase appears after some meaningful content
-                    if (idx in 21 until fullText.length - 10) {
-                        // For high-frequency words, require preceding punctuation or newline
-                        if (isHighFrequency) {
-                            val preceding = if (idx > 0) fullText[idx - 1] else ' '
-                            if (preceding != '。' && preceding != '！' && preceding != '？' && preceding != '\n' && preceding != '，') {
-                                continue
-                            }
-                        }
-                        val think = fullText.substring(0, idx).trim()
-                        val answer = fullText.substring(idx).trim()
-                        return Pair(think, answer)
-                    }
-                }
-            }
-
-            // No separation found — everything is answer
-            return Pair("", fullText)
+            return sanitized
         }
     }
 }
