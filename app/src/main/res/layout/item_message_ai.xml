@@ -66,19 +66,51 @@
         </LinearLayout>
 
         <!-- Main message content (Markdown rendered) -->
-        <TextView
-            android:id="@+id/tv_message"
+        <LinearLayout
+            android:id="@+id/message_content_container"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:background="@drawable/bg_bubble_ai"
-            android:maxWidth="260dp"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp"
-            android:lineSpacingExtra="2dp"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp"
-            android:paddingTop="10dp"
-            android:paddingBottom="10dp" />
+            android:orientation="vertical">
+
+            <HorizontalScrollView
+                android:id="@+id/message_scroll_view"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fillViewport="false"
+                android:overScrollMode="ifContentScrolls">
+
+                <TextView
+                    android:id="@+id/tv_message"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_bubble_ai"
+                    android:minWidth="180dp"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:lineSpacingExtra="2dp"
+                    android:paddingStart="14dp"
+                    android:paddingEnd="14dp"
+                    android:paddingTop="10dp"
+                    android:paddingBottom="10dp" />
+            </HorizontalScrollView>
+
+            <SeekBar
+                android:id="@+id/seek_content_width"
+                android:layout_width="220dp"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:max="100"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tv_content_width_hint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:textColor="@color/text_tertiary"
+                android:textSize="10sp"
+                android:visibility="gone" />
+        </LinearLayout>
 
         <!-- Search results citation button -->
         <LinearLayout

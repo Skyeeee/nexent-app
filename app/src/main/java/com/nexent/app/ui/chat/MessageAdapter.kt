@@ -9,6 +9,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.nexent.app.databinding.ItemMessageAiBinding
 import com.nexent.app.databinding.ItemMessageUserBinding
 import io.noties.markwon.Markwon
+import io.noties.markwon.ext.tables.TablePlugin
 import com.bumptech.glide.Glide
 import java.net.HttpURLConnection
 import java.net.URL
@@ -17,6 +18,8 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.graphics.Typeface
+import android.widget.SeekBar
+import kotlin.math.roundToInt
 
 class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(MessageDiffCallback()) {
 
@@ -93,7 +96,9 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
 
     class AiMessageViewHolder(private val binding: ItemMessageAiBinding) :
         RecyclerView.ViewHolder(binding.root) {
-        private val markwon = Markwon.create(binding.root.context)
+        private val markwon = Markwon.builder(binding.root.context)
+            .usePlugin(TablePlugin.create(binding.root.context))
+            .build()
 
         fun bind(message: ChatMessage) {
             // Step-by-step thinking process (TaskWindow equivalent)
@@ -106,6 +111,7 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
                 message.content
             }
             markwon.setMarkdown(binding.tvMessage, displayContent)
+            bindContentWidthControl(displayContent)
 
             // Search results citations (sources button)
             bindSearchResults(message)
@@ -120,6 +126,55 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
             // Token metrics (if available)
             bindTokenMetrics(message)
         }
+
+        private fun bindContentWidthControl(content: String) {
+            val looksLikeTable = content.contains("|") && content.lines().any { it.contains("|") }
+            if (!looksLikeTable) {
+                binding.seekContentWidth.visibility = View.GONE
+                binding.tvContentWidthHint.visibility = View.GONE
+                return
+            }
+
+            binding.seekContentWidth.visibility = View.VISIBLE
+            binding.tvContentWidthHint.visibility = View.VISIBLE
+
+            val minWidthPx = dpToPx(180)
+            val maxWidthPx = (binding.root.resources.displayMetrics.widthPixels - dpToPx(96)).coerceAtLeast(minWidthPx)
+            val defaultWidthPx = minOf(maxWidthPx, dpToPx(260))
+
+            fun updateWidth(progress: Int) {
+                val ratio = progress / 100f
+                val targetWidth = (minWidthPx + (maxWidthPx - minWidthPx) * ratio).roundToInt()
+                val scrollParams = binding.messageScrollView.layoutParams
+                scrollParams.width = targetWidth
+                binding.messageScrollView.layoutParams = scrollParams
+
+                val textParams = binding.tvMessage.layoutParams
+                textParams.width = targetWidth
+                binding.tvMessage.layoutParams = textParams
+
+                binding.tvContentWidthHint.text = "宽度: ${targetWidth / binding.root.resources.displayMetrics.density}dp"
+            }
+
+            binding.seekContentWidth.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        updateWidth(progress)
+                    }
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+
+            if (binding.seekContentWidth.progress == 0) {
+                binding.seekContentWidth.progress = ((defaultWidthPx - minWidthPx) * 100f / (maxWidthPx - minWidthPx)).roundToInt().coerceIn(0, 100)
+            }
+            updateWidth(binding.seekContentWidth.progress)
+        }
+
+        private fun dpToPx(dp: Int): Int =
+            (dp * binding.root.resources.displayMetrics.density).roundToInt()
 
         private fun bindThinkingProcess(message: ChatMessage) {
             val steps = message.steps
