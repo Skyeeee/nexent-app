@@ -44,6 +44,8 @@ data class ChatMessage(
     val isUser: Boolean,
     val imageUri: String? = null,
     val imageUrl: String? = null,       // resolved image URL from upload
+    val audioUrl: String? = null,       // local or remote audio file URL (voice message)
+    val audioDuration: Int = 0,         // audio duration in milliseconds (0 = unknown)
     // AI-specific fields (like nexent-web ChatMessageType)
     val steps: List<AgentStep> = emptyList(),
     val searchResults: List<SearchResult> = emptyList(),
@@ -677,22 +679,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         uploadAttachmentAndSendMessage(imageUri, description, isVoice = false)
     }
 
-    fun sendVoiceMessage(audioUri: Uri, description: String) {
-        uploadAttachmentAndSendMessage(audioUri, description, isVoice = true)
+    fun sendVoiceMessage(audioUri: Uri, description: String, audioDuration: Int = 0) {
+        uploadAttachmentAndSendMessage(audioUri, description, isVoice = true, audioDuration = audioDuration)
     }
 
-    private fun uploadAttachmentAndSendMessage(uri: Uri, description: String, isVoice: Boolean) {
-        val currentMessages = _messages.value.orEmpty().toMutableList()
+    private fun uploadAttachmentAndSendMessage(uri: Uri, description: String, isVoice: Boolean, audioDuration: Int = 0) {
         val placeholderText = description.ifBlank {
             if (isVoice) "[语音]" else "[图片]"
         }
-        currentMessages.add(
-            ChatMessage(
-                content = placeholderText,
-                isUser = true,
-                imageUri = uri.toString()
-            )
+        val placeholder = ChatMessage(
+            content = placeholderText,
+            isUser = true,
+            // For voice, keep the local file so it can be played immediately while uploading.
+            // For images, show the local image preview.
+            imageUri = if (isVoice) null else uri.toString(),
+            audioUrl = if (isVoice) uri.toString() else null,
+            audioDuration = if (isVoice) audioDuration else 0
         )
+        val currentMessages = _messages.value.orEmpty().toMutableList()
+        currentMessages.add(placeholder)
         _messages.value = currentMessages.toList()
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -715,25 +720,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 Log.d(TAG, "uploadAttachment result: $uploadedUrl, filename=$name, mime=$mime")
 
-                    if (uploadedUrl == null) {
+                if (uploadedUrl == null) {
                     _error.postValue(if (isVoice) "语音上传失败" else "图片上传失败")
                 } else {
-                            // extract presigned_url from the returned URL and use it as the attachment URL
-                            val meta = extractAttachmentMetadata(uploadedUrl)
-                                Log.d(TAG, "attachment meta: $meta")
-                                val backendPath = meta["backend_path"]
-                                val presigned = meta["presigned_url"]
+                    // extract presigned_url from the returned URL and use it as the attachment URL
+                    val meta = extractAttachmentMetadata(uploadedUrl)
+                    Log.d(TAG, "attachment meta: $meta")
+                    val backendPath = meta["backend_path"]
+                    val presigned = meta["presigned_url"]
 
-                                // Prefer backend-friendly path, then presigned URL, then raw URL
-                                val attachmentToSend = when {
-                                    !backendPath.isNullOrBlank() -> backendPath
-                                    !presigned.isNullOrBlank() -> presigned
-                                    else -> uploadedUrl
-                                }
+                    // Prefer backend-friendly path, then presigned URL, then raw URL
+                    val attachmentToSend = when {
+                        !backendPath.isNullOrBlank() -> backendPath
+                        !presigned.isNullOrBlank() -> presigned
+                        else -> uploadedUrl
+                    }
                     val prompt = description.ifBlank {
                         if (isVoiceAttachment) "请分析这段语音" else "请分析这张图片"
                     }
 
+                    // 不替换 audioUrl：保留本地文件路径用于播放，远端 URL 仅用于 API 发送
                     sendMessage(prompt, listOf(attachmentToSend))
                 }
             } catch (e: Exception) {
@@ -741,6 +747,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _isLoading.postValue(false)
             }
+        }
+    }
+
+    private fun updateMessageAudioUrl(messageId: Long, audioUrl: String) {
+        val msgs = _messages.value.orEmpty().toMutableList()
+        val idx = msgs.indexOfFirst { it.id == messageId }
+        if (idx >= 0) {
+            msgs[idx] = msgs[idx].copy(audioUrl = audioUrl)
+            _messages.postValue(msgs.toList())
         }
     }
 

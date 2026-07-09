@@ -1,15 +1,12 @@
 package com.nexent.app.ui.chat
 
 import android.Manifest
-import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
-import android.provider.MediaStore
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
@@ -26,12 +23,6 @@ import com.nexent.app.databinding.ActivityChatBinding
 import java.io.File
 import java.util.Locale
 
-data class SpeechRecognitionConfig(
-    val language: String,
-    val prompt: String,
-    val maxResults: Int,
-)
-
 class ChatActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityChatBinding
@@ -41,16 +32,18 @@ class ChatActivity : AppCompatActivity() {
     private var pendingCameraUri: Uri? = null
     private var shouldAutoScrollToBottom = true
 
-    private var speechRecognizer: SpeechRecognizer? = null
-    private lateinit var speechRecognizerIntent: Intent
+    private var mediaRecorder: MediaRecorder? = null
+    private var recordingFile: File? = null
+    private var isRecording: Boolean = false
     private var isVoiceButtonPressed: Boolean = false
+    private var recordingStartTime: Long = 0
     private val recordAudioPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
             Log.d("ChatActivity", "RECORD_AUDIO permission granted")
-            // Only start recognition if the user is still pressing the voice button
-            if (isVoiceButtonPressed) startVoiceRecognition()
+            // Only start recording if the user is still pressing the voice button
+            if (isVoiceButtonPressed) startRecording()
         } else {
             Log.d("ChatActivity", "RECORD_AUDIO permission denied")
             Toast.makeText(this, "需要麦克风权限才能使用语音输入", Toast.LENGTH_SHORT).show()
@@ -91,22 +84,6 @@ class ChatActivity : AppCompatActivity() {
         else Toast.makeText(this, "需要相机权限才能拍照", Toast.LENGTH_SHORT).show()
     }
 
-    // Voice input
-    private val voiceLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode != RESULT_OK) return@registerForActivityResult
-
-        val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-        val spokenText = matches?.firstOrNull()?.trim().orEmpty()
-        if (spokenText.isNotBlank()) {
-            binding.etMessage.setText(spokenText)
-            binding.etMessage.setSelection(spokenText.length)
-        } else {
-            Toast.makeText(this, "未识别到语音内容", Toast.LENGTH_SHORT).show()
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityChatBinding.inflate(layoutInflater)
@@ -117,7 +94,6 @@ class ChatActivity : AppCompatActivity() {
 
         setupHeader(agentTitle)
         setupRecyclerView()
-        setupSpeechRecognizer()
         setupInputArea()
         observeViewModel()
 
@@ -144,24 +120,6 @@ class ChatActivity : AppCompatActivity() {
         const val EXTRA_AGENT_NAME = "extra_agent_name"
         const val EXTRA_AGENT_TITLE = "extra_agent_title"
         const val EXTRA_AGENT_DESC = "extra_agent_desc"
-        private val GOOGLE_VOICE_PACKAGES = listOf(
-            "com.google.android.googlequicksearchbox",
-            "com.google.android.apps.googlevoiceassistant"
-        )
-
-        fun createSpeechRecognitionConfig(): SpeechRecognitionConfig = SpeechRecognitionConfig(
-            language = "zh-CN",
-            prompt = "说出你想问的问题...",
-            maxResults = 1,
-        )
-
-        fun createSpeechRecognitionIntent(): Intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            val config = createSpeechRecognitionConfig()
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, config.language)
-            putExtra(RecognizerIntent.EXTRA_PROMPT, config.prompt)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, config.maxResults)
-        }
 
         private val avatarBgList = intArrayOf(
             R.drawable.bg_avatar_01, R.drawable.bg_avatar_02,
@@ -206,7 +164,7 @@ class ChatActivity : AppCompatActivity() {
                     if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
                         == PackageManager.PERMISSION_GRANTED
                     ) {
-                        startVoiceRecognition()
+                        startRecording()
                     } else {
                         recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     }
@@ -214,16 +172,27 @@ class ChatActivity : AppCompatActivity() {
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     isVoiceButtonPressed = false
-                    stopVoiceRecognition()
+                    stopRecordingAndUpload()
                     true
                 }
                 else -> false
             }
         }
 
-        // Voice input via the add button
+        // Voice input via the add button (tap to record, tap again to stop & upload)
         binding.btnAdd.setOnClickListener {
-            launchVoiceRecognition()
+            if (isRecording) {
+                stopRecordingAndUpload()
+            } else {
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                    == PackageManager.PERMISSION_GRANTED
+                ) {
+                    startRecording()
+                } else {
+                    isVoiceButtonPressed = true
+                    recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
         }
 
         // File picker via image button for both images and audio
@@ -258,108 +227,85 @@ class ChatActivity : AppCompatActivity() {
         popup.show()
     }
 
-    private fun setupSpeechRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
-
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: Bundle?) {
-                    Log.d("ChatActivity", "onReadyForSpeech")
-                }
-                override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {
-                    // update visualizer based on rms
-                    Log.d("ChatActivity", "onRmsChanged: $rmsdB")
-                    runOnUiThread {
-                        binding.voiceLevelView.visibility = View.VISIBLE
-                        updateVoiceLevel(rmsdB)
-                    }
-                }
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() {
-                    binding.btnVoice.alpha = 1f
-                    Log.d("ChatActivity", "onEndOfSpeech")
-                    runOnUiThread {
-                        binding.voiceLevelView.visibility = View.GONE
-                    }
-                }
-                override fun onError(error: Int) {
-                    binding.btnVoice.alpha = 1f
-                    Log.d("ChatActivity", "onError: $error")
-                    val message = when (error) {
-                        SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "网络错误，请稍后重试"
-                        SpeechRecognizer.ERROR_AUDIO -> "录音发生错误"
-                        SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "未识别到语音"
-                        else -> "语音识别失败"
-                    }
-                    Toast.makeText(this@ChatActivity, message, Toast.LENGTH_SHORT).show()
-                    runOnUiThread {
-                        binding.voiceLevelView.visibility = View.GONE
-                    }
-                }
-                override fun onPartialResults(partialResults: Bundle?) {
-                    val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val partialText = matches?.firstOrNull()
-                    if (!partialText.isNullOrBlank()) {
-                        binding.etMessage.setText(partialText)
-                        binding.etMessage.setSelection(partialText.length)
-                        Log.d("ChatActivity", "onPartialResults: $partialText")
-                    }
-                }
-                override fun onResults(results: Bundle?) {
-                    binding.btnVoice.alpha = 1f
-                    Log.d("ChatActivity", "onResults")
-                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    val spokenText = matches?.firstOrNull().orEmpty()
-                    if (spokenText.isNotBlank()) {
-                        binding.etMessage.setText(spokenText)
-                        binding.etMessage.setSelection(spokenText.length)
-                        runOnUiThread {
-                            binding.voiceLevelView.visibility = View.GONE
-                        }
-                    } else {
-                        Toast.makeText(this@ChatActivity, "未识别到语音内容", Toast.LENGTH_SHORT).show()
-                    }
-                }
-                override fun onEvent(eventType: Int, params: Bundle?) {}
-            })
-        }
-
-        speechRecognizerIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        }
-    }
-
-    private fun startVoiceRecognition() {
-        binding.btnVoice.alpha = 0.6f
-        Toast.makeText(this, "按住说话，松开结束录音", Toast.LENGTH_SHORT).show()
-        launchVoiceRecognition()
-    }
-
-    private fun launchVoiceRecognition() {
-        val intent = createSpeechRecognitionIntent()
-        val availablePackage = GOOGLE_VOICE_PACKAGES.firstOrNull { packageName ->
-            packageManager.resolveActivity(
-                Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).setPackage(packageName),
-                PackageManager.MATCH_DEFAULT_ONLY
-            ) != null
-        }
-        if (availablePackage != null) {
-            intent.setPackage(availablePackage)
-        }
-
+    private fun startRecording() {
+        if (isRecording) return
         try {
-            voiceLauncher.launch(intent)
-        } catch (e: ActivityNotFoundException) {
-            binding.etMessage.requestFocus()
-            Toast.makeText(this, "当前设备没有可用的语音输入服务，请直接输入文字", Toast.LENGTH_LONG).show()
+            val outputDir = externalCacheDir ?: cacheDir
+            val file = File(outputDir, "nexent_voice_${System.currentTimeMillis()}.m4a")
+            mediaRecorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setOutputFile(file.absolutePath)
+                prepare()
+                start()
+            }
+            recordingFile = file
+            recordingStartTime = System.currentTimeMillis()
+            isRecording = true
+            binding.btnVoice.alpha = 0.6f
+            binding.btnAdd.alpha = 0.6f
+            binding.voiceLevelView.visibility = View.VISIBLE
+            Toast.makeText(this, "正在录音，松开结束并发送", Toast.LENGTH_SHORT).show()
+            Log.d("ChatActivity", "Recording started: ${file.absolutePath}")
+        } catch (e: Exception) {
+            Log.e("ChatActivity", "startRecording failed", e)
+            isRecording = false
+            recordingFile = null
+            mediaRecorder?.release()
+            mediaRecorder = null
+            Toast.makeText(this, "无法开始录音: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun stopVoiceRecognition() {
+    private fun stopRecordingAndUpload() {
+        if (!isRecording) return
+        val recorder = mediaRecorder
+        val file = recordingFile
+        val duration = System.currentTimeMillis() - recordingStartTime
+        isRecording = false
         binding.btnVoice.alpha = 1f
+        binding.btnAdd.alpha = 1f
+        binding.voiceLevelView.visibility = View.GONE
+        try {
+            recorder?.stop()
+        } catch (e: Exception) {
+            Log.e("ChatActivity", "stopRecording failed", e)
+        } finally {
+            recorder?.release()
+            mediaRecorder = null
+        }
+
+        // 检查录音时长是否足够（至少1秒）
+        if (duration < 1000) {
+            file?.delete()
+            Toast.makeText(this, "录音时间太短，请按住按钮录音", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (file != null && file.exists() && file.length() > 0) {
+            Log.d("ChatActivity", "Recording stopped, uploading: ${file.absolutePath}, size=${file.length()}")
+            // 获取录音时长
+            val duration = getAudioDuration(file.absolutePath)
+            // Hand the recorded audio to the same upload flow used for other attachments
+            viewModel.sendVoiceMessage(Uri.fromFile(file), "", audioDuration = duration)
+        } else {
+            Toast.makeText(this, "录音文件为空，已取消", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun getAudioDuration(filePath: String): Int {
+        return try {
+            val player = MediaPlayer()
+            player.setDataSource(filePath)
+            player.prepare()
+            val duration = player.duration.coerceAtLeast(0)
+            player.release()
+            duration
+        } catch (e: Exception) {
+            Log.e("ChatActivity", "getAudioDuration failed", e)
+            0
+        }
     }
 
     private fun selectMode(mode: String) {
@@ -369,20 +315,6 @@ class ChatActivity : AppCompatActivity() {
             binding.tvModeLabel.text = getString(R.string.mode_quick)
         }
         viewModel.setThinkMode(mode)
-    }
-
-    private fun updateVoiceLevel(rmsdB: Float) {
-        // Normalize rmsdB to 0..1 (typical Android RMS is small negative to positive)
-        val level = ((rmsdB + 10f) / 20f).coerceIn(0f, 1f)
-        val dots = listOf(binding.voiceDot1, binding.voiceDot2, binding.voiceDot3)
-        for ((i, dot) in dots.withIndex()) {
-            val thresholdStart = i * (1f / dots.size)
-            val thresholdEnd = (i + 1) * (1f / dots.size)
-            val factor = ((level - thresholdStart) / (thresholdEnd - thresholdStart)).coerceIn(0f, 1f)
-            val scale = 1f + factor * 1.4f
-            dot.scaleY = scale
-            dot.alpha = 0.5f + 0.5f * factor
-        }
     }
 
     private fun checkCameraPermission() {
@@ -407,8 +339,15 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        speechRecognizer?.destroy()
-        speechRecognizer = null
+        if (isRecording) {
+            try {
+                mediaRecorder?.stop()
+            } catch (_: Exception) { }
+            mediaRecorder?.release()
+            mediaRecorder = null
+            recordingFile?.delete()
+            isRecording = false
+        }
     }
 
     private fun observeViewModel() {

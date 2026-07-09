@@ -18,6 +18,11 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.graphics.Typeface
+import android.media.MediaPlayer
+import android.os.Handler
+import android.os.Looper
+import android.widget.ImageButton
+import android.widget.ProgressBar
 import android.widget.SeekBar
 import kotlin.math.roundToInt
 
@@ -56,9 +61,40 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
 
     class UserMessageViewHolder(private val binding: ItemMessageUserBinding) :
         RecyclerView.ViewHolder(binding.root) {
+
+        private var mediaPlayer: MediaPlayer? = null
+        private val handler = Handler(Looper.getMainLooper())
+        private val progressRunnable = object : Runnable {
+            override fun run() {
+                val mp = mediaPlayer ?: return
+                if (mp.isPlaying) {
+                    val duration = mp.duration.coerceAtLeast(1)
+                    binding.audioProgress.progress = (mp.currentPosition * 100 / duration)
+                    binding.tvAudioDuration.text = formatDuration(mp.currentPosition)
+                    handler.postDelayed(this, 200)
+                }
+            }
+        }
+
         fun bind(message: ChatMessage) {
+            releasePlayer()
             binding.tvMessage.text = message.content
-            if (!message.imageUri.isNullOrBlank()) {
+            if (!message.audioUrl.isNullOrBlank()) {
+                binding.audioContainer.visibility = View.VISIBLE
+                binding.ivAttachment.visibility = View.GONE
+                binding.ivAttachment.setImageDrawable(null)
+                binding.audioProgress.progress = 0
+                binding.btnPlayAudio.setImageResource(android.R.drawable.ic_media_play)
+                // 使用 ChatMessage 中预存的音频时长，避免异步获取
+                binding.tvAudioDuration.text = if (message.audioDuration > 0) {
+                    formatDuration(message.audioDuration)
+                } else {
+                    "00:00"
+                }
+                binding.btnPlayAudio.setOnClickListener {
+                    togglePlay(message.audioUrl)
+                }
+            } else if (!message.imageUri.isNullOrBlank()) {
                 binding.ivAttachment.visibility = View.VISIBLE
                 binding.ivAttachment.adjustViewBounds = true
 
@@ -90,7 +126,89 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
             } else {
                 binding.ivAttachment.visibility = View.GONE
                 binding.ivAttachment.setImageDrawable(null)
+                binding.audioContainer.visibility = View.GONE
             }
+        }
+
+        private fun togglePlay(url: String) {
+            val mp = mediaPlayer
+            if (mp != null && mp.isPlaying) {
+                mp.pause()
+                binding.btnPlayAudio.setImageResource(android.R.drawable.ic_media_play)
+                return
+            }
+            if (mp != null) {
+                // Resume
+                try {
+                    mp.start()
+                    binding.btnPlayAudio.setImageResource(android.R.drawable.ic_media_pause)
+                    handler.post(progressRunnable)
+                } catch (e: Exception) {
+                    android.util.Log.e("MessageAdapter", "resume audio failed: ${e.message}")
+                    releasePlayer()
+                    showPlayError()
+                }
+                return
+            }
+            // Start new playback
+            try {
+                val player = MediaPlayer()
+                if (url.startsWith("http", true)) {
+                    player.setDataSource(url)
+                } else if (url.startsWith("file://", true)) {
+                    player.setDataSource(url.substring(7))
+                } else {
+                    player.setDataSource(binding.root.context, android.net.Uri.parse(url))
+                }
+                player.setOnPreparedListener {
+                    binding.btnPlayAudio.setImageResource(android.R.drawable.ic_media_pause)
+                    binding.tvAudioDuration.text = formatDuration(player.duration)
+                    player.start()
+                    handler.post(progressRunnable)
+                }
+                player.setOnCompletionListener {
+                    binding.btnPlayAudio.setImageResource(android.R.drawable.ic_media_play)
+                    binding.audioProgress.progress = 0
+                    binding.tvAudioDuration.text = formatDuration(player.duration)
+                    releasePlayer()
+                }
+                player.setOnErrorListener { _, _, _ ->
+                    releasePlayer()
+                    showPlayError()
+                    true
+                }
+                player.prepareAsync()
+                mediaPlayer = player
+            } catch (e: Exception) {
+                android.util.Log.e("MessageAdapter", "play audio failed: ${e.message}")
+                releasePlayer()
+                showPlayError()
+            }
+        }
+
+        private fun showPlayError() {
+            binding.tvAudioDuration.text = "加载失败"
+            handler.postDelayed({
+                binding.tvAudioDuration.text = "00:00"
+            }, 2000)
+        }
+
+        private fun releasePlayer() {
+            handler.removeCallbacks(progressRunnable)
+            mediaPlayer?.let {
+                try {
+                    if (it.isPlaying) it.stop()
+                } catch (_: Exception) { }
+                it.release()
+            }
+            mediaPlayer = null
+        }
+
+        private fun formatDuration(ms: Int): String {
+            val totalSec = ms / 1000
+            val min = totalSec / 60
+            val sec = totalSec % 60
+            return String.format("%02d:%02d", min, sec)
         }
     }
 
