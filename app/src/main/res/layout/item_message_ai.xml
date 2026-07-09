@@ -68,31 +68,24 @@
         <!-- Main message content (Markdown rendered) -->
         <LinearLayout
             android:id="@+id/message_content_container"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
-            <HorizontalScrollView
-                android:id="@+id/message_scroll_view"
-                android:layout_width="wrap_content"
+            <TextView
+                android:id="@+id/tv_message"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fillViewport="false"
-                android:overScrollMode="ifContentScrolls">
-
-                <TextView
-                    android:id="@+id/tv_message"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:background="@drawable/bg_bubble_ai"
-                    android:minWidth="180dp"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:lineSpacingExtra="2dp"
-                    android:paddingStart="14dp"
-                    android:paddingEnd="14dp"
-                    android:paddingTop="10dp"
-                    android:paddingBottom="10dp" />
-            </HorizontalScrollView>
+                android:background="@drawable/bg_bubble_ai"
+                android:minWidth="180dp"
+                android:maxWidth="320dp"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:lineSpacingExtra="2dp"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp" />
 
             <SeekBar
                 android:id="@+id/seek_content_width"

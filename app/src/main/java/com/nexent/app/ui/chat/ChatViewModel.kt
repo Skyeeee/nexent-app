@@ -179,45 +179,61 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendMessage(text: String, attachments: List<String>? = null) {
-        if (text.isBlank()) return
+        if (text.isBlank() && attachments.isNullOrEmpty()) return
 
         viewModelScope.launch(Dispatchers.Main) {
             val currentMessages = _messages.value.orEmpty().toMutableList()
             currentMessages.add(ChatMessage(content = text, isUser = true))
             _messages.value = currentMessages.toList()
 
-            val baseUrl = prefHelper.baseUrl
-            val request = ChatRequest(
-                conversationId = conversationId,
-                agentName = currentAgentName,
-                query = text,
-                deepThink = deepThinkEnabled,
-                attachments = attachments
-            )
+            startStreamRequest(text, attachments)
+        }
+    }
 
-            _isLoading.value = true
-            _error.value = null
+    fun sendAttachmentOnlyMessage(attachments: List<String>, imageUri: String? = null, audioUrl: String? = null, audioDuration: Int = 0) {
+        viewModelScope.launch(Dispatchers.Main) {
+            val currentMessages = _messages.value.orEmpty().toMutableList()
+            currentMessages.add(ChatMessage(content = "", isUser = true, imageUri = imageUri, audioUrl = audioUrl, audioDuration = audioDuration))
+            _messages.value = currentMessages.toList()
 
-            // Add a placeholder AI message for streaming
-            val aiMsg = ChatMessage(
-                content = "…",
-                isUser = false,
-                isStreaming = true,
-                isDeepThink = deepThinkEnabled
-            )
-            val updated = _messages.value.orEmpty().toMutableList()
-            updated.add(aiMsg)
-            _messages.value = updated.toList()
+            startStreamRequest("", attachments)
+        }
+    }
 
-            // Accumulated state during streaming
-            var finalAnswer = ""
-            var currentSteps = mutableListOf<AgentStep>()
-            currentStep = null  // Use class member, reset for new stream
-            var searchResults = mutableListOf<SearchResult>()
-            var images = mutableListOf<String>()
-            val pendingMetrics = mutableMapOf<String, TokenMetrics>()
-            var stepCounter = 0
+    private fun startStreamRequest(text: String, attachments: List<String>?) {
+        val baseUrl = prefHelper.baseUrl
+        val request = ChatRequest(
+            conversationId = conversationId,
+            agentName = currentAgentName,
+            query = text,
+            deepThink = deepThinkEnabled,
+            attachments = attachments
+        )
 
+        _isLoading.value = true
+        _error.value = null
+
+        // Add a placeholder AI message for streaming
+        val aiMsg = ChatMessage(
+            content = "…",
+            isUser = false,
+            isStreaming = true,
+            isDeepThink = deepThinkEnabled
+        )
+        val updated = _messages.value.orEmpty().toMutableList()
+        updated.add(aiMsg)
+        _messages.value = updated.toList()
+
+        // Accumulated state during streaming
+        var finalAnswer = ""
+        var currentSteps = mutableListOf<AgentStep>()
+        currentStep = null  // Use class member, reset for new stream
+        var searchResults = mutableListOf<SearchResult>()
+        var images = mutableListOf<String>()
+        val pendingMetrics = mutableMapOf<String, TokenMetrics>()
+        var stepCounter = 0
+
+        viewModelScope.launch(Dispatchers.Main) {
             try {
                 RetrofitClient.streamChat(baseUrl, request, prefHelper.apikey)
                     .flowOn(Dispatchers.IO)
@@ -684,22 +700,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun uploadAttachmentAndSendMessage(uri: Uri, description: String, isVoice: Boolean, audioDuration: Int = 0) {
-        val placeholderText = description.ifBlank {
-            if (isVoice) "[语音]" else "[图片]"
-        }
-        val placeholder = ChatMessage(
-            content = placeholderText,
-            isUser = true,
-            // For voice, keep the local file so it can be played immediately while uploading.
-            // For images, show the local image preview.
-            imageUri = if (isVoice) null else uri.toString(),
-            audioUrl = if (isVoice) uri.toString() else null,
-            audioDuration = if (isVoice) audioDuration else 0
-        )
-        val currentMessages = _messages.value.orEmpty().toMutableList()
-        currentMessages.add(placeholder)
-        _messages.value = currentMessages.toList()
-
         viewModelScope.launch(Dispatchers.IO) {
             _isLoading.postValue(true)
             _error.postValue(null)
@@ -735,12 +735,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         !presigned.isNullOrBlank() -> presigned
                         else -> uploadedUrl
                     }
-                    val prompt = description.ifBlank {
-                        if (isVoiceAttachment) "请分析这段语音" else "请分析这张图片"
-                    }
 
                     // 不替换 audioUrl：保留本地文件路径用于播放，远端 URL 仅用于 API 发送
-                    sendMessage(prompt, listOf(attachmentToSend))
+                    sendAttachmentOnlyMessage(listOf(attachmentToSend), imageUri = if (isVoice) null else uri.toString(), audioUrl = if (isVoice) uri.toString() else null, audioDuration = audioDuration)
                 }
             } catch (e: Exception) {
                 _error.postValue(if (isVoice) "语音上传失败: ${e.message}" else "图片上传失败: ${e.message}")

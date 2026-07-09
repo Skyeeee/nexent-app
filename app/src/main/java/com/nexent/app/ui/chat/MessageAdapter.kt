@@ -79,6 +79,8 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
         fun bind(message: ChatMessage) {
             releasePlayer()
             binding.tvMessage.text = message.content
+            // 内容为空时隐藏文本气泡，避免显示空白消息
+            binding.tvMessage.visibility = if (message.content.isBlank()) View.GONE else View.VISIBLE
             if (!message.audioUrl.isNullOrBlank()) {
                 binding.audioContainer.visibility = View.VISIBLE
                 binding.ivAttachment.visibility = View.GONE
@@ -263,10 +265,6 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
             fun updateWidth(progress: Int) {
                 val ratio = progress / 100f
                 val targetWidth = (minWidthPx + (maxWidthPx - minWidthPx) * ratio).roundToInt()
-                val scrollParams = binding.messageScrollView.layoutParams
-                scrollParams.width = targetWidth
-                binding.messageScrollView.layoutParams = scrollParams
-
                 val textParams = binding.tvMessage.layoutParams
                 textParams.width = targetWidth
                 binding.tvMessage.layoutParams = textParams
