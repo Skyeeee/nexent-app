@@ -122,6 +122,48 @@
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent">
 
+            <!-- Attachment preview area (visible only when a file is selected) -->
+            <LinearLayout
+                android:id="@+id/attachment_preview"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/iv_attachment_thumbnail"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:scaleType="centerCrop"
+                    android:background="@drawable/bg_input_field"
+                    android:padding="2dp" />
+
+                <TextView
+                    android:id="@+id/tv_attachment_name"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:layout_marginEnd="8dp"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:maxLines="2"
+                    android:ellipsize="end" />
+
+                <ImageButton
+                    android:id="@+id/btn_remove_attachment"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="移除附件"
+                    android:src="@drawable/ic_close_circle"
+                    android:tint="@color/text_secondary"
+                    android:scaleType="center" />
+            </LinearLayout>
+
             <!-- Row 1: Voice button + text input + Send button -->
             <LinearLayout
                 android:layout_width="match_parent"

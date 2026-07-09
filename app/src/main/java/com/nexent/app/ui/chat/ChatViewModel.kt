@@ -190,13 +190,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendAttachmentOnlyMessage(attachments: List<String>, imageUri: String? = null, audioUrl: String? = null, audioDuration: Int = 0) {
+    fun sendAttachmentOnlyMessage(attachments: List<String>, text: String = "", imageUri: String? = null, audioUrl: String? = null, audioDuration: Int = 0) {
         viewModelScope.launch(Dispatchers.Main) {
             val currentMessages = _messages.value.orEmpty().toMutableList()
-            currentMessages.add(ChatMessage(content = "", isUser = true, imageUri = imageUri, audioUrl = audioUrl, audioDuration = audioDuration))
+            currentMessages.add(ChatMessage(content = text, isUser = true, imageUri = imageUri, audioUrl = audioUrl, audioDuration = audioDuration))
             _messages.value = currentMessages.toList()
 
-            startStreamRequest("", attachments)
+            startStreamRequest(text, attachments)
         }
     }
 
@@ -691,15 +691,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // ---- Attachment handling ----
 
-    fun sendImageMessage(imageUri: Uri, description: String) {
-        uploadAttachmentAndSendMessage(imageUri, description, isVoice = false)
+    fun sendImageMessage(imageUri: Uri) {
+        uploadAttachmentAndSendMessage(imageUri, isVoice = false)
     }
 
-    fun sendVoiceMessage(audioUri: Uri, description: String, audioDuration: Int = 0) {
-        uploadAttachmentAndSendMessage(audioUri, description, isVoice = true, audioDuration = audioDuration)
+    fun sendImageMessage(imageUri: Uri, text: String) {
+        uploadAttachmentAndSendMessage(imageUri, isVoice = false, text = text)
     }
 
-    private fun uploadAttachmentAndSendMessage(uri: Uri, description: String, isVoice: Boolean, audioDuration: Int = 0) {
+    fun sendVoiceMessage(audioUri: Uri, audioDuration: Int = 0) {
+        uploadAttachmentAndSendMessage(audioUri, isVoice = true, audioDuration = audioDuration)
+    }
+
+    private fun uploadAttachmentAndSendMessage(uri: Uri, isVoice: Boolean, audioDuration: Int = 0, text: String = "") {
         viewModelScope.launch(Dispatchers.IO) {
             _isLoading.postValue(true)
             _error.postValue(null)
@@ -737,7 +741,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     // 不替换 audioUrl：保留本地文件路径用于播放，远端 URL 仅用于 API 发送
-                    sendAttachmentOnlyMessage(listOf(attachmentToSend), imageUri = if (isVoice) null else uri.toString(), audioUrl = if (isVoice) uri.toString() else null, audioDuration = audioDuration)
+                    sendAttachmentOnlyMessage(listOf(attachmentToSend), text = text, imageUri = if (isVoice) null else uri.toString(), audioUrl = if (isVoice) uri.toString() else null, audioDuration = audioDuration)
                 }
             } catch (e: Exception) {
                 _error.postValue(if (isVoice) "语音上传失败: ${e.message}" else "图片上传失败: ${e.message}")

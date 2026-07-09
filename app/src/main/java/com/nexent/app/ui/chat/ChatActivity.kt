@@ -3,10 +3,12 @@ package com.nexent.app.ui.chat
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
@@ -31,6 +33,9 @@ class ChatActivity : AppCompatActivity() {
 
     private var pendingCameraUri: Uri? = null
     private var shouldAutoScrollToBottom = true
+
+    /** Currently selected attachment waiting to be sent */
+    private var pendingAttachmentUri: Uri? = null
 
     private var mediaRecorder: MediaRecorder? = null
     private var recordingFile: File? = null
@@ -58,9 +63,9 @@ class ChatActivity : AppCompatActivity() {
             val mimeType = contentResolver.getType(it) ?: ""
             val isAudio = mimeType.lowercase(Locale.getDefault()).startsWith("audio/")
             if (isAudio) {
-                viewModel.sendVoiceMessage(it, "")
+                viewModel.sendVoiceMessage(it)
             } else {
-                viewModel.sendImageMessage(it, "")
+                setPendingAttachment(it)
             }
         }
     }
@@ -71,7 +76,7 @@ class ChatActivity : AppCompatActivity() {
     ) { success ->
         if (success) {
             pendingCameraUri?.let { uri ->
-                viewModel.sendImageMessage(uri, "")
+                setPendingAttachment(uri)
             }
         }
     }
@@ -150,8 +155,16 @@ class ChatActivity : AppCompatActivity() {
 
     private fun setupInputArea() {
         binding.btnSend.setOnClickListener {
-            val text = binding.etMessage.text?.toString()?.trim() ?: return@setOnClickListener
-            if (text.isNotBlank()) {
+            val text = binding.etMessage.text?.toString()?.trim() ?: ""
+            val attachment = pendingAttachmentUri
+
+            if (text.isBlank() && attachment == null) return@setOnClickListener
+
+            if (attachment != null) {
+                viewModel.sendImageMessage(attachment, text)
+                binding.etMessage.setText("")
+                clearPendingAttachment()
+            } else if (text.isNotBlank()) {
                 viewModel.sendMessage(text)
                 binding.etMessage.setText("")
             }
@@ -211,8 +224,64 @@ class ChatActivity : AppCompatActivity() {
             current.insert(current.length, "😊")
         }
 
+        // Remove attachment button
+        binding.btnRemoveAttachment.setOnClickListener {
+            clearPendingAttachment()
+        }
+
         // Mode dropdown selector
         binding.modeSelector.setOnClickListener { showModePopup() }
+    }
+
+    /**
+     * Set the pending attachment and show the preview UI above the input field.
+     */
+    private fun setPendingAttachment(uri: Uri) {
+        pendingAttachmentUri = uri
+
+        // Show thumbnail
+        try {
+            val inputStream = contentResolver.openInputStream(uri)
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            inputStream?.close()
+            binding.ivAttachmentThumbnail.setImageBitmap(bitmap)
+        } catch (e: Exception) {
+            binding.ivAttachmentThumbnail.setImageResource(R.drawable.ic_image)
+        }
+
+        // Show file name
+        val fileName = queryFileName(uri) ?: "附件"
+        binding.tvAttachmentName.text = fileName
+
+        binding.attachmentPreview.visibility = View.VISIBLE
+    }
+
+    /**
+     * Clear the pending attachment and hide the preview UI.
+     */
+    private fun clearPendingAttachment() {
+        pendingAttachmentUri = null
+        binding.attachmentPreview.visibility = View.GONE
+        binding.ivAttachmentThumbnail.setImageDrawable(null)
+        binding.tvAttachmentName.text = ""
+    }
+
+    private fun queryFileName(uri: Uri): String? {
+        if (uri.scheme == "content") {
+            val cursor = contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.DISPLAY_NAME),
+                null,
+                null,
+                null
+            )
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    return it.getString(it.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+                }
+            }
+        }
+        return uri.lastPathSegment
     }
 
     private fun showModePopup() {
@@ -232,7 +301,7 @@ class ChatActivity : AppCompatActivity() {
         try {
             val outputDir = externalCacheDir ?: cacheDir
             val file = File(outputDir, "nexent_voice_${System.currentTimeMillis()}.m4a")
-            mediaRecorder = MediaRecorder().apply {
+            mediaRecorder = MediaRecorder(applicationContext).apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
@@ -286,9 +355,9 @@ class ChatActivity : AppCompatActivity() {
         if (file != null && file.exists() && file.length() > 0) {
             Log.d("ChatActivity", "Recording stopped, uploading: ${file.absolutePath}, size=${file.length()}")
             // 获取录音时长
-            val duration = getAudioDuration(file.absolutePath)
+            val audioDurationMs = getAudioDuration(file.absolutePath)
             // Hand the recorded audio to the same upload flow used for other attachments
-            viewModel.sendVoiceMessage(Uri.fromFile(file), "", audioDuration = duration)
+            viewModel.sendVoiceMessage(Uri.fromFile(file), audioDuration = audioDurationMs)
         } else {
             Toast.makeText(this, "录音文件为空，已取消", Toast.LENGTH_SHORT).show()
         }
