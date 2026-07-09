@@ -26,11 +26,11 @@
     </FrameLayout>
 
     <LinearLayout
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
-        <!-- Thinking process (step-by-step reasoning) -->
+        <!-- Thinking process (step-by-step reasoning) with collapse/expand -->
         <LinearLayout
             android:id="@+id/thinking_container"
             android:layout_width="wrap_content"
@@ -41,28 +41,71 @@
             android:background="@drawable/bg_search_bar"
             android:padding="8dp">
 
-            <TextView
-                android:id="@+id/tv_thinking_label"
+            <!-- Toggle header -->
+            <LinearLayout
+                android:id="@+id/thinking_header"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="4dp"
-                android:text="@string/thinking_label"
-                android:textColor="@color/text_tertiary"
-                android:textSize="11sp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:clickable="true"
+                android:focusable="true"
+                android:background="?android:attr/selectableItemBackground"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:paddingStart="4dp"
+                android:paddingEnd="8dp">
 
-            <TextView
-                android:id="@+id/tv_thinking"
+                <TextView
+                    android:id="@+id/tv_toggle_arrow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="▼"
+                    android:textSize="10sp"
+                    android:textColor="@color/text_tertiary"
+                    android:layout_marginEnd="6dp" />
+
+                <TextView
+                    android:id="@+id/tv_thinking_label"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/thinking_label"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="11sp" />
+
+                <TextView
+                    android:id="@+id/tv_thinking_dots"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="..."
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="11sp"
+                    android:visibility="gone"
+                    android:layout_marginStart="4dp" />
+            </LinearLayout>
+
+            <!-- Thinking content with fixed max height and internal scrolling -->
+            <ScrollView
+                android:id="@+id/thinking_scroll_view"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:maxWidth="260dp"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp"
-                android:lineSpacingExtra="2dp"
-                android:paddingStart="10dp"
-                android:paddingEnd="10dp"
-                android:paddingTop="8dp"
-                android:paddingBottom="8dp"
-                android:layout_marginTop="4dp" />
+                android:maxHeight="220dp"
+                android:layout_marginTop="4dp"
+                android:scrollbars="vertical">
+
+                <TextView
+                    android:id="@+id/tv_thinking"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:maxWidth="260dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:lineSpacingExtra="2dp"
+                    android:paddingStart="10dp"
+                    android:paddingEnd="10dp"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp" />
+            </ScrollView>
         </LinearLayout>
 
         <!-- Main message content (Markdown rendered) -->
@@ -87,22 +130,6 @@
                 android:paddingTop="10dp"
                 android:paddingBottom="10dp" />
 
-            <SeekBar
-                android:id="@+id/seek_content_width"
-                android:layout_width="220dp"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:max="100"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/tv_content_width_hint"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:textColor="@color/text_tertiary"
-                android:textSize="10sp"
-                android:visibility="gone" />
         </LinearLayout>
 
         <!-- Search results citation button -->

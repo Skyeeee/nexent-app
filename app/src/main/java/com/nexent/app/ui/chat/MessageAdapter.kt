@@ -23,7 +23,8 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.ImageButton
 import android.widget.ProgressBar
-import android.widget.SeekBar
+import android.widget.ScrollView
+import com.nexent.app.data.model.AgentStep
 import kotlin.math.roundToInt
 
 class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(MessageDiffCallback()) {
@@ -220,6 +221,10 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
             .usePlugin(TablePlugin.create(binding.root.context))
             .build()
 
+        // Track thinking expanded state per message
+        private var isThinkingExpanded = true
+        private var thinkingText: String = ""
+
         fun bind(message: ChatMessage) {
             // Step-by-step thinking process (TaskWindow equivalent)
             bindThinkingProcess(message)
@@ -231,7 +236,6 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
                 message.content
             }
             markwon.setMarkdown(binding.tvMessage, displayContent)
-            bindContentWidthControl(displayContent)
 
             // Search results citations (sources button)
             bindSearchResults(message)
@@ -243,103 +247,111 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
             binding.tvStreamingIndicator.visibility =
                 if (message.isStreaming) View.VISIBLE else View.GONE
 
+            // Show/hide thinking dots animation during streaming
+            if (message.isStreaming && message.steps.isNotEmpty()) {
+                binding.tvThinkingDots.visibility = View.VISIBLE
+            } else {
+                binding.tvThinkingDots.visibility = View.GONE
+            }
+
             // Token metrics (if available)
             bindTokenMetrics(message)
         }
 
-        private fun bindContentWidthControl(content: String) {
-            val looksLikeTable = content.contains("|") && content.lines().any { it.contains("|") }
-            if (!looksLikeTable) {
-                binding.seekContentWidth.visibility = View.GONE
-                binding.tvContentWidthHint.visibility = View.GONE
-                return
-            }
 
-            binding.seekContentWidth.visibility = View.VISIBLE
-            binding.tvContentWidthHint.visibility = View.VISIBLE
-
-            val minWidthPx = dpToPx(180)
-            val maxWidthPx = (binding.root.resources.displayMetrics.widthPixels - dpToPx(96)).coerceAtLeast(minWidthPx)
-            val defaultWidthPx = minOf(maxWidthPx, dpToPx(260))
-
-            fun updateWidth(progress: Int) {
-                val ratio = progress / 100f
-                val targetWidth = (minWidthPx + (maxWidthPx - minWidthPx) * ratio).roundToInt()
-                val textParams = binding.tvMessage.layoutParams
-                textParams.width = targetWidth
-                binding.tvMessage.layoutParams = textParams
-
-                binding.tvContentWidthHint.text = "宽度: ${targetWidth / binding.root.resources.displayMetrics.density}dp"
-            }
-
-            binding.seekContentWidth.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) {
-                        updateWidth(progress)
+        /**
+         * Build the thinking process text from steps.
+         * Returns the full text content for the thinking section.
+         */
+        private fun buildThinkingText(steps: List<AgentStep>): String {
+            if (steps.isEmpty()) return ""
+            val sb = StringBuilder()
+            for ((stepIndex, step) in steps.withIndex()) {
+                if (step.title.isNotBlank()) {
+                    sb.appendLine(step.title)
+                }
+                for (content in step.contents) {
+                    when (content.type) {
+                        ChatViewModel.TYPE_MODEL_OUTPUT_THINKING -> {
+                            sb.appendLine("🤔 ${content.content}")
+                        }
+                        ChatViewModel.TYPE_MODEL_OUTPUT_DEEP_THINKING -> {
+                            sb.appendLine("🧠 ${content.content}")
+                        }
+                        ChatViewModel.TYPE_MODEL_OUTPUT_CODE -> {
+                            sb.appendLine("💻 ```\n${content.content}\n```")
+                        }
+                        "executing" -> {
+                            sb.appendLine("🔧 ${content.content}")
+                        }
+                        ChatViewModel.TYPE_MEMORY_SEARCH -> {
+                            sb.appendLine("📂 ${content.content}")
+                        }
+                        ChatViewModel.TYPE_AGENT_NEW_RUN -> {
+                            sb.appendLine("💭 ${content.content}")
+                        }
+                        ChatViewModel.TYPE_CARD -> {
+                            sb.appendLine("📋 ${content.content.take(80)}")
+                        }
+                        ChatViewModel.TYPE_ERROR -> {
+                            sb.appendLine("❌ ${content.content}")
+                        }
                     }
                 }
-
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-            })
-
-            if (binding.seekContentWidth.progress == 0) {
-                binding.seekContentWidth.progress = ((defaultWidthPx - minWidthPx) * 100f / (maxWidthPx - minWidthPx)).roundToInt().coerceIn(0, 100)
+                step.metrics?.let { metrics ->
+                    sb.appendLine("   ⚡ ${metrics.duration}s | input: ${metrics.stepInputTokens ?: "?"} | output: ${metrics.stepOutputTokens ?: "?"} tokens")
+                }
+                if (stepIndex < steps.size - 1) {
+                    sb.appendLine("---")
+                }
             }
-            updateWidth(binding.seekContentWidth.progress)
+            return sb.toString().trim()
         }
-
-        private fun dpToPx(dp: Int): Int =
-            (dp * binding.root.resources.displayMetrics.density).roundToInt()
 
         private fun bindThinkingProcess(message: ChatMessage) {
             val steps = message.steps
             if (steps.isNotEmpty()) {
                 binding.thinkingContainer.visibility = View.VISIBLE
+                thinkingText = buildThinkingText(steps)
+                binding.tvThinking.text = thinkingText
 
-                val sb = StringBuilder()
-                for ((stepIndex, step) in steps.withIndex()) {
-                    if (step.title.isNotBlank()) {
-                        sb.appendLine(step.title)
-                    }
-                    for (content in step.contents) {
-                        when (content.type) {
-                            ChatViewModel.TYPE_MODEL_OUTPUT_THINKING -> {
-                                sb.appendLine("🤔 ${content.content}")
-                            }
-                            ChatViewModel.TYPE_MODEL_OUTPUT_DEEP_THINKING -> {
-                                sb.appendLine("🧠 ${content.content}")
-                            }
-                            ChatViewModel.TYPE_MODEL_OUTPUT_CODE -> {
-                                sb.appendLine("💻 ```\n${content.content}\n```")
-                            }
-                            "executing" -> {
-                                sb.appendLine("🔧 ${content.content}")
-                            }
-                            ChatViewModel.TYPE_MEMORY_SEARCH -> {
-                                sb.appendLine("📂 ${content.content}")
-                            }
-                            ChatViewModel.TYPE_AGENT_NEW_RUN -> {
-                                sb.appendLine("💭 ${content.content}")
-                            }
-                            ChatViewModel.TYPE_CARD -> {
-                                sb.appendLine("📋 ${content.content.take(80)}")
-                            }
-                            ChatViewModel.TYPE_ERROR -> {
-                                sb.appendLine("❌ ${content.content}")
-                            }
-                        }
-                    }
-                    step.metrics?.let { metrics ->
-                        sb.appendLine("   ⚡ ${metrics.duration}s | input: ${metrics.stepInputTokens ?: "?"} | output: ${metrics.stepOutputTokens ?: "?"} tokens")
-                    }
-                    if (stepIndex < steps.size - 1) {
-                        sb.appendLine("---")
-                    }
+                // Auto-collapse thinking when streaming finishes and final answer is ready
+                if (!message.isStreaming && message.finalAnswer.isNotBlank()) {
+                    isThinkingExpanded = false
+                } else {
+                    // During streaming or no final answer yet, keep expanded
+                    isThinkingExpanded = true
                 }
-                binding.tvThinking.text = sb.toString().trim()
+
+                updateThinkingVisibility()
+
+                // Set up toggle click listener
+                binding.thinkingHeader.setOnClickListener {
+                    isThinkingExpanded = !isThinkingExpanded
+                    updateThinkingVisibility()
+                }
             } else {
                 binding.thinkingContainer.visibility = View.GONE
+                // Reset to expanded for next message
+                isThinkingExpanded = true
+                thinkingText = ""
+            }
+        }
+
+        /**
+         * Update the thinking section visibility based on collapsed state.
+         * Uses ScrollView visibility toggle to prevent layout jumps.
+         * The maxHeight is defined in XML (220dp) so the thinking content
+         * has a fixed maximum height, preventing the final answer from jumping.
+         */
+        private fun updateThinkingVisibility() {
+            if (isThinkingExpanded) {
+                binding.tvToggleArrow.text = "▼"
+                binding.thinkingScrollView.visibility = View.VISIBLE
+            } else {
+                binding.tvToggleArrow.text = "▶"
+                binding.thinkingScrollView.visibility = View.GONE
+                // When collapsed, thinking container takes minimal space (just header)
             }
         }
 
