@@ -229,13 +229,20 @@ class MessageAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(Message
             // Step-by-step thinking process (TaskWindow equivalent)
             bindThinkingProcess(message)
 
-            // Main content (final answer) with Markdown rendering
-            val displayContent = if (message.finalAnswer.isNotBlank()) {
-                message.finalAnswer
+            // During streaming: hide main output, show only thinking process
+            // After streaming ends: show final answer as main output (matching nexent-web behavior)
+            if (!message.isStreaming && message.finalAnswer.isNotBlank()) {
+                // Streaming finished - show main content with final answer
+                binding.messageContentContainer.visibility = View.VISIBLE
+                markwon.setMarkdown(binding.tvMessage, message.finalAnswer)
+            } else if (!message.isStreaming && message.content.isNotBlank()) {
+                // Non-streaming message with content (historical messages)
+                binding.messageContentContainer.visibility = View.VISIBLE
+                markwon.setMarkdown(binding.tvMessage, message.content)
             } else {
-                message.content
+                // During streaming - hide main output, only thinking is visible
+                binding.messageContentContainer.visibility = View.GONE
             }
-            markwon.setMarkdown(binding.tvMessage, displayContent)
 
             // Search results citations (sources button)
             bindSearchResults(message)
