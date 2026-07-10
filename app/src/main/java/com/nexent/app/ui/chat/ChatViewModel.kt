@@ -703,6 +703,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         uploadAttachmentAndSendMessage(audioUri, isVoice = true, audioDuration = audioDuration)
     }
 
+    fun sendVoiceMessage(audioUri: Uri, text: String, audioDuration: Int = 0) {
+        uploadAttachmentAndSendMessage(audioUri, isVoice = true, text = text, audioDuration = audioDuration)
+    }
+
     private fun uploadAttachmentAndSendMessage(uri: Uri, isVoice: Boolean, audioDuration: Int = 0, text: String = "") {
         viewModelScope.launch(Dispatchers.IO) {
             _isLoading.postValue(true)

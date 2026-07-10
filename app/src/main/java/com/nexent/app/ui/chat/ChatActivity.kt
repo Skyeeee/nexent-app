@@ -36,6 +36,8 @@ class ChatActivity : AppCompatActivity() {
 
     /** Currently selected attachment waiting to be sent */
     private var pendingAttachmentUri: Uri? = null
+    /** MIME type of the pending attachment */
+    private var pendingAttachmentMimeType: String? = null
 
     private var mediaRecorder: MediaRecorder? = null
     private var recordingFile: File? = null
@@ -60,13 +62,7 @@ class ChatActivity : AppCompatActivity() {
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
-            val mimeType = contentResolver.getType(it) ?: ""
-            val isAudio = mimeType.lowercase(Locale.getDefault()).startsWith("audio/")
-            if (isAudio) {
-                viewModel.sendVoiceMessage(it)
-            } else {
-                setPendingAttachment(it)
-            }
+            setPendingAttachment(it)
         }
     }
 
@@ -161,7 +157,12 @@ class ChatActivity : AppCompatActivity() {
             if (text.isBlank() && attachment == null) return@setOnClickListener
 
             if (attachment != null) {
-                viewModel.sendImageMessage(attachment, text)
+                val mimeType = pendingAttachmentMimeType?.lowercase(Locale.getDefault()) ?: ""
+                if (mimeType.startsWith("audio/")) {
+                    viewModel.sendVoiceMessage(attachment, text = text)
+                } else {
+                    viewModel.sendImageMessage(attachment, text)
+                }
                 binding.etMessage.setText("")
                 clearPendingAttachment()
             } else if (text.isNotBlank()) {
@@ -238,14 +239,22 @@ class ChatActivity : AppCompatActivity() {
      */
     private fun setPendingAttachment(uri: Uri) {
         pendingAttachmentUri = uri
+        pendingAttachmentMimeType = contentResolver.getType(uri)
 
-        // Show thumbnail
-        try {
-            val inputStream = contentResolver.openInputStream(uri)
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            inputStream?.close()
-            binding.ivAttachmentThumbnail.setImageBitmap(bitmap)
-        } catch (e: Exception) {
+        // Show thumbnail: decode image for image types, show icon for others
+        val mimeType = pendingAttachmentMimeType?.lowercase(Locale.getDefault()) ?: ""
+        if (mimeType.startsWith("image/")) {
+            try {
+                val inputStream = contentResolver.openInputStream(uri)
+                val bitmap = BitmapFactory.decodeStream(inputStream)
+                inputStream?.close()
+                binding.ivAttachmentThumbnail.setImageBitmap(bitmap)
+            } catch (e: Exception) {
+                binding.ivAttachmentThumbnail.setImageResource(R.drawable.ic_image)
+            }
+        } else if (mimeType.startsWith("audio/")) {
+            binding.ivAttachmentThumbnail.setImageResource(R.drawable.ic_mic)
+        } else {
             binding.ivAttachmentThumbnail.setImageResource(R.drawable.ic_image)
         }
 
